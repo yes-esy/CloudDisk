@@ -1,1 +1,0 @@
-/usr/bin/gcc -g CMakeFiles/CloudDisk.dir/src/main.c.o -o CloudDisk 

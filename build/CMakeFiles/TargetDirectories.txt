@@ -1,4 +1,0 @@
-/home/yes/Projects/CloudDisk/build/CMakeFiles/CloudDiskServer.dir
-/home/yes/Projects/CloudDisk/build/CMakeFiles/CloudDiskClient.dir
-/home/yes/Projects/CloudDisk/build/CMakeFiles/edit_cache.dir
-/home/yes/Projects/CloudDisk/build/CMakeFiles/rebuild_cache.dir
