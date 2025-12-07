@@ -1,0 +1,14 @@
+[
+{
+  "directory": "/home/yes/Projects/CloudDisk/build",
+  "command": "/usr/bin/gcc  -I/home/yes/Projects/CloudDisk/include -g -Wall -Wextra -o CMakeFiles/CloudDisk.dir/CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.c.o -c /home/yes/Projects/CloudDisk/build/CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.c",
+  "file": "/home/yes/Projects/CloudDisk/build/CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.c",
+  "output": "CMakeFiles/CloudDisk.dir/CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.c.o"
+},
+{
+  "directory": "/home/yes/Projects/CloudDisk/build",
+  "command": "/usr/bin/gcc  -I/home/yes/Projects/CloudDisk/include -g -Wall -Wextra -o CMakeFiles/CloudDisk.dir/src/main.c.o -c /home/yes/Projects/CloudDisk/src/main.c",
+  "file": "/home/yes/Projects/CloudDisk/src/main.c",
+  "output": "CMakeFiles/CloudDisk.dir/src/main.c.o"
+}
+]
