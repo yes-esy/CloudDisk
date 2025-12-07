@@ -117,65 +117,78 @@ depend:
 .PHONY : depend
 
 #=============================================================================
-# Target rules for targets named CloudDisk
+# Target rules for targets named CloudDiskServer
 
 # Build rule for target.
-CloudDisk: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CloudDisk
-.PHONY : CloudDisk
+CloudDiskServer: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CloudDiskServer
+.PHONY : CloudDiskServer
 
 # fast build rule for target.
-CloudDisk/fast:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/CloudDisk.dir/build.make CMakeFiles/CloudDisk.dir/build
-.PHONY : CloudDisk/fast
+CloudDiskServer/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/CloudDiskServer.dir/build.make CMakeFiles/CloudDiskServer.dir/build
+.PHONY : CloudDiskServer/fast
 
-CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.o: CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.c.o
-.PHONY : CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.o
+#=============================================================================
+# Target rules for targets named CloudDiskClient
 
-# target to build an object file
-CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/CloudDisk.dir/build.make CMakeFiles/CloudDisk.dir/CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.c.o
-.PHONY : CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.c.o
+# Build rule for target.
+CloudDiskClient: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CloudDiskClient
+.PHONY : CloudDiskClient
 
-CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.i: CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.c.i
-.PHONY : CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.i
+# fast build rule for target.
+CloudDiskClient/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/CloudDiskClient.dir/build.make CMakeFiles/CloudDiskClient.dir/build
+.PHONY : CloudDiskClient/fast
 
-# target to preprocess a source file
-CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/CloudDisk.dir/build.make CMakeFiles/CloudDisk.dir/CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.c.i
-.PHONY : CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.c.i
-
-CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.s: CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.c.s
-.PHONY : CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.s
-
-# target to generate assembly for a file
-CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/CloudDisk.dir/build.make CMakeFiles/CloudDisk.dir/CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.c.s
-.PHONY : CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.c.s
-
-src/main.o: src/main.c.o
-.PHONY : src/main.o
+src/client/main.o: src/client/main.c.o
+.PHONY : src/client/main.o
 
 # target to build an object file
-src/main.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/CloudDisk.dir/build.make CMakeFiles/CloudDisk.dir/src/main.c.o
-.PHONY : src/main.c.o
+src/client/main.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/CloudDiskClient.dir/build.make CMakeFiles/CloudDiskClient.dir/src/client/main.c.o
+.PHONY : src/client/main.c.o
 
-src/main.i: src/main.c.i
-.PHONY : src/main.i
+src/client/main.i: src/client/main.c.i
+.PHONY : src/client/main.i
 
 # target to preprocess a source file
-src/main.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/CloudDisk.dir/build.make CMakeFiles/CloudDisk.dir/src/main.c.i
-.PHONY : src/main.c.i
+src/client/main.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/CloudDiskClient.dir/build.make CMakeFiles/CloudDiskClient.dir/src/client/main.c.i
+.PHONY : src/client/main.c.i
 
-src/main.s: src/main.c.s
-.PHONY : src/main.s
+src/client/main.s: src/client/main.c.s
+.PHONY : src/client/main.s
 
 # target to generate assembly for a file
-src/main.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/CloudDisk.dir/build.make CMakeFiles/CloudDisk.dir/src/main.c.s
-.PHONY : src/main.c.s
+src/client/main.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/CloudDiskClient.dir/build.make CMakeFiles/CloudDiskClient.dir/src/client/main.c.s
+.PHONY : src/client/main.c.s
+
+src/server/main.o: src/server/main.c.o
+.PHONY : src/server/main.o
+
+# target to build an object file
+src/server/main.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/CloudDiskServer.dir/build.make CMakeFiles/CloudDiskServer.dir/src/server/main.c.o
+.PHONY : src/server/main.c.o
+
+src/server/main.i: src/server/main.c.i
+.PHONY : src/server/main.i
+
+# target to preprocess a source file
+src/server/main.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/CloudDiskServer.dir/build.make CMakeFiles/CloudDiskServer.dir/src/server/main.c.i
+.PHONY : src/server/main.c.i
+
+src/server/main.s: src/server/main.c.s
+.PHONY : src/server/main.s
+
+# target to generate assembly for a file
+src/server/main.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/CloudDiskServer.dir/build.make CMakeFiles/CloudDiskServer.dir/src/server/main.c.s
+.PHONY : src/server/main.c.s
 
 # Help Target
 help:
@@ -185,13 +198,14 @@ help:
 	@echo "... depend"
 	@echo "... edit_cache"
 	@echo "... rebuild_cache"
-	@echo "... CloudDisk"
-	@echo "... CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.o"
-	@echo "... CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.i"
-	@echo "... CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.s"
-	@echo "... src/main.o"
-	@echo "... src/main.i"
-	@echo "... src/main.s"
+	@echo "... CloudDiskClient"
+	@echo "... CloudDiskServer"
+	@echo "... src/client/main.o"
+	@echo "... src/client/main.i"
+	@echo "... src/client/main.s"
+	@echo "... src/server/main.o"
+	@echo "... src/server/main.i"
+	@echo "... src/server/main.s"
 .PHONY : help
 
 

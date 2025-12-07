@@ -40,5 +40,6 @@ set(CMAKE_MAKEFILE_PRODUCTS
 
 # Dependency information for all targets:
 set(CMAKE_DEPEND_INFO_FILES
-  "CMakeFiles/CloudDisk.dir/DependInfo.cmake"
+  "CMakeFiles/CloudDiskServer.dir/DependInfo.cmake"
+  "CMakeFiles/CloudDiskClient.dir/DependInfo.cmake"
   )

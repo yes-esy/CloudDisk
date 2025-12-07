@@ -1,0 +1,1 @@
+/usr/bin/gcc -g CMakeFiles/CloudDiskServer.dir/src/server/main.c.o -o CloudDiskServer 

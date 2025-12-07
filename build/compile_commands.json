@@ -1,14 +1,14 @@
 [
 {
   "directory": "/home/yes/Projects/CloudDisk/build",
-  "command": "/usr/bin/gcc  -I/home/yes/Projects/CloudDisk/include -g -Wall -Wextra -o CMakeFiles/CloudDisk.dir/CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.c.o -c /home/yes/Projects/CloudDisk/build/CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.c",
-  "file": "/home/yes/Projects/CloudDisk/build/CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.c",
-  "output": "CMakeFiles/CloudDisk.dir/CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.c.o"
+  "command": "/usr/bin/gcc  -I/home/yes/Projects/CloudDisk/include -g -std=gnu11 -Wall -Wextra -o CMakeFiles/CloudDiskServer.dir/src/server/main.c.o -c /home/yes/Projects/CloudDisk/src/server/main.c",
+  "file": "/home/yes/Projects/CloudDisk/src/server/main.c",
+  "output": "CMakeFiles/CloudDiskServer.dir/src/server/main.c.o"
 },
 {
   "directory": "/home/yes/Projects/CloudDisk/build",
-  "command": "/usr/bin/gcc  -I/home/yes/Projects/CloudDisk/include -g -Wall -Wextra -o CMakeFiles/CloudDisk.dir/src/main.c.o -c /home/yes/Projects/CloudDisk/src/main.c",
-  "file": "/home/yes/Projects/CloudDisk/src/main.c",
-  "output": "CMakeFiles/CloudDisk.dir/src/main.c.o"
+  "command": "/usr/bin/gcc  -I/home/yes/Projects/CloudDisk/include -g -std=gnu11 -Wall -Wextra -o CMakeFiles/CloudDiskClient.dir/src/client/main.c.o -c /home/yes/Projects/CloudDisk/src/client/main.c",
+  "file": "/home/yes/Projects/CloudDisk/src/client/main.c",
+  "output": "CMakeFiles/CloudDiskClient.dir/src/client/main.c.o"
 }
 ]

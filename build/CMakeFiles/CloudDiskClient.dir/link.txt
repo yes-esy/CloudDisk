@@ -1,0 +1,1 @@
+/usr/bin/gcc -g CMakeFiles/CloudDiskClient.dir/src/client/main.c.o -o CloudDiskClient 
