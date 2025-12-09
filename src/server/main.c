@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-08 22:51:00
+ * @LastEditTime : 2025-12-09 21:13:25
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
  **/
 #include "Common.h"
@@ -27,7 +27,7 @@ int main(int argc, char **argv) {
         }
         for(int i = 0 ; i < nReady; ++ i) {
             int fd = pEventArr[i].data.fd;
-            if(fd == listenFd) {
+            if(fd == listenFd) { // 监听
                 int peerFd = accept(listenFd,NULL,NULL);
                 printf("conn %d has connected.\n",peerFd);
                 addEpollReadFd(epollFd,peerFd);
