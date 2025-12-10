@@ -4,11 +4,12 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-09 23:12:39
+ * @LastEditTime : 2025-12-10 23:09:20
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #pragma once
-#include "ThreadPool.h"
+#define PATH_MAX_LENGTH 256
+typedef struct task_t task_t;
 /**
  * 命令
  */
@@ -29,14 +30,20 @@ typedef enum {
     TASK_LOGIN_SECTION2_RESP_OK,
     TASK_LOGIN_SECTION2_RESP_ERROR,
 } CmdType;
-void pwdCommand(task_t* task);
-void cdCommand(task_t* task);
-void cdCommand(task_t* task);
-void mkdirCommand(task_t* task);
-void rmdirCommand(task_t* task);
-void notCommand(task_t* task);
-void putsCommand(task_t* task);
-void getsCommand(task_t* task);
-void userLoginCheck1(task_t* task);
-void userLoginCheck2(task_t* task);
+void pwdCommand(task_t *task);
+void cdCommand(task_t *task);
+void cdCommand(task_t *task);
+void mkdirCommand(task_t *task);
+void rmdirCommand(task_t *task);
+void notCommand(task_t *task);
+void putsCommand(task_t *task);
+void getsCommand(task_t *task);
+void userLoginCheck1(task_t *task);
+void userLoginCheck2(task_t *task);
+int getCommandType(const char *str);
+void splitString(const char *pstrs, const char *delimiter, char *tokens[], int max_tokens,
+                 int *pcount);
+typedef struct packet_t packet_t;
+//解析命令
+int parseCommand(const char *pinput, int len, packet_t *pt);
 void executeCmd(task_t *task);

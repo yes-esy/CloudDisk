@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-09 22:36:05
+ * @LastEditTime : 2025-12-10 21:39:53
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "LinkedList.h"
@@ -72,15 +72,16 @@ void deleteNode(ListNode **head, void *target) {
 }
 
 // 删除链表中值为peerfd的节点（假设只删除一个）
-void deleteNode2(ListNode **head, int peerfd) {
-
-}
+// void deleteNode2(ListNode **head, int peerfd) {
+//     //
+//     return;
+// }
 
 // 打印链表(仅供调试使用)
 void printList(ListNode *head) {
     ListNode *current = head;
     while (current != NULL) {
-        printf("%x ", current->val);
+        printf("%p ", (void *)current->val);
         current = current->next;
     }
     printf("\n");

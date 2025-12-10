@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-09 22:20:31
+ * @LastEditTime : 2025-12-10 21:37:16
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #pragma once
@@ -25,7 +25,7 @@ void appendNode(ListNode **head, void *val);
 void deleteNode(ListNode **head, void *target);
 
 // 删除链表中值为peerfd的节点（假设只删除一个）
-void deleteNode2(ListNode **head, int peerfd);
+// void deleteNode2(ListNode **head, int peerfd);
 
 // 打印链表
 void printList(ListNode *head);

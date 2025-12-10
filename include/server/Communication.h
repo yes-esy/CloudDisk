@@ -4,13 +4,12 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-09 22:57:41
+ * @LastEditTime : 2025-12-10 20:49:19
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #pragma once
 #include "Common.h"
 #include "ThreadPool.h"
-//其作用：确定接收len字节的数据
-int recvn(int sockFd,void *buff,int len);
+
 //主线程调用:处理客户端发过来的消息
 void handleMessage(int sockFd, int epFd, taskQueue_t *queue);

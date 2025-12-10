@@ -4,10 +4,11 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-09 23:04:38
+ * @LastEditTime : 2025-12-10 21:19:57
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "Communication.h"
+#include "Net.h"
 
 void handleMessage(int sockFd, int epFd, taskQueue_t *queue) {
     // 消息格式: cmd content

@@ -4,11 +4,13 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-09 23:00:37
+ * @LastEditTime : 2025-12-10 21:24:42
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
-#include "Common.h"
+#pragma once
 #include <pthread.h>
+#include "Common.h"
+#include "Command.h"
 #define THREAD_ERROR_CHECK(ret, funcName)                                                          \
     {                                                                                              \
         if (ret != 0) {                                                                            \
@@ -52,3 +54,5 @@ int QueueSize(taskQueue_t *queue);
 int taskEnque(taskQueue_t *queue, task_t *task);
 // 任务出队
 task_t *taskDeque(taskQueue_t *queue);
+int threadPoolInit(threadPool_t *threadPool, int num);
+int threadPoolStart(threadPool_t *pthreadPool);

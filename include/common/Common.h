@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-09 23:06:24
+ * @LastEditTime : 2025-12-10 23:08:24
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
  **/
 #pragma once
@@ -31,7 +31,8 @@
         }                                                                                          \
     }
 #define PACKET_BUFF_SIZE 1000
-typedef struct {
+
+typedef struct packet_t {
     int len;         // 内容长度
     CmdType cmdType; // 命令类型
     char buff[PACKET_BUFF_SIZE]; // 记录内容本身

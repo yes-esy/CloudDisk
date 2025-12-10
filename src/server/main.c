@@ -4,12 +4,23 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-09 21:13:25
+ * @LastEditTime : 2025-12-10 23:09:50
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
  **/
 #include "Common.h"
 #include "Net.h"
+#include "Communication.h"
+#include "ThreadPool.h"
 int main(int argc, char **argv) {
+    (void)argv;
+    //创建线程池结构体
+    threadPool_t threadPool;
+    memset(&threadPool, 0, sizeof(threadPool));
+    //初始化线程池
+    threadPoolInit(&threadPool, 3);
+    //启动线程池
+    threadPoolStart(&threadPool);
+
     ARGS_CHECK(argc, 2);
     int listenFd = tcpInit("127.0.0.1", "8080");
     int epollFd = epoll_create1(0);
@@ -32,8 +43,7 @@ int main(int argc, char **argv) {
                 printf("conn %d has connected.\n",peerFd);
                 addEpollReadFd(epollFd,peerFd);
             } else  {
-                // handleClientMessage(fd,epollFd,)
-                // @todo 
+                handleMessage(fd, epollFd, &threadPool.que);
             }
         }
     }

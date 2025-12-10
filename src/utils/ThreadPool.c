@@ -1,13 +1,47 @@
 /**
- * @FilePath     : /CloudDisk/src/common/ThreadPool.c
+ * @FilePath     : /CloudDisk/src/utils/ThreadPool.c
  * @Description  :  线程池.c文件
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-09 22:12:11
+ * @LastEditTime : 2025-12-10 21:50:38
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "ThreadPool.h"
+//每一个子线程在执行的函数执行体(start_routine)
+void *threadFunc(void *arg) {
+    //不断地从任务队列中获取任务，并执行
+    threadPool_t *threadPool = (threadPool_t *)arg;
+    while (1) {
+        task_t *ptask = taskDeque(&threadPool->que);
+        if (ptask) {
+            //执行业务逻辑
+            executeCmd(ptask);
+            free(ptask); //执行完任务后，释放任务节点
+        } else {         //ptask为NULL的情况
+            break;
+        }
+    }
+    printf("sub thread %ld is exiting.\n", pthread_self());
+    return NULL;
+}
+int threadPoolInit(threadPool_t *threadPool, int num) {
+    threadPool->pthreadNum = num;
+    threadPool->pthreads = calloc(num, sizeof(pthread_t));
+    queueInit(&threadPool->que);
+
+    return 0;
+}
+int threadPoolStart(threadPool_t *threadPool) {
+    if (threadPool) {
+        for (int i = 0; i < threadPool->pthreadNum; ++i) {
+            int ret = pthread_create(&threadPool->pthreads[i], NULL, threadFunc, threadPool);
+            THREAD_ERROR_CHECK(ret, "pthread_create");
+        }
+    }
+    return 0;
+}
+
 /**
  * @brief        : 对任务队列进行初始化
  * @param         {taskQueue_t} *queue: 任务队列
@@ -72,7 +106,7 @@ int taskEnque(taskQueue_t *queue, task_t *task) {
     int ret = pthread_mutex_lock(&queue->mutex);
     THREAD_ERROR_CHECK(ret, "pthread_mutex_lock");
     if (queueIsEmpty(queue)) {
-        queue->pFront = queue->pFront = task;
+        queue->pFront = queue->pRear = task;
     } else {
         task->pNext = queue->pFront;
         queue->pFront = task;
