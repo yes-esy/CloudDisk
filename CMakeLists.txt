@@ -20,6 +20,7 @@ set(CLIENT_SRCS
     "${CLIENT_SRC}/main.c"
     "${COMMON_SRC}/Net.c"
     "${COMMON_SRC}/Command.c"
+    "${CLIENT_SRC}/Client.c"
 )
 set(SERVER_SRCS
     "${SERVER_SRC}/main.c"

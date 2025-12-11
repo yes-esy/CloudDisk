@@ -4,11 +4,15 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-10 23:09:20
+ * @LastEditTime : 2025-12-11 23:28:47
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #pragma once
-#define PATH_MAX_LENGTH 256
+#define PATH_MAX_LENGTH 2048
+// 定义云盘的根目录和虚拟根路径
+#define CLOUD_DISK_ROOT "/home/yes/Projects/CloudDisk/CloudDiskWorkForlder"
+#define VIRTUAL_ROOT "/"
+#define RESPONSE_LENGTH 4096
 typedef struct task_t task_t;
 /**
  * 命令
