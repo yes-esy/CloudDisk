@@ -1,13 +1,16 @@
 /**
- * @FilePath     : /CloudDisk/src/common/Net.c
+ * @FilePath     : /CloudDisk/src/common/net.c
  * @Description  :  
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-10 23:11:23
+ * @LastEditTime : 2025-12-13 21:21:48
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
-#include "Net.h"
+#include "net.h"
+#include <string.h>
+#include <unistd.h>
+#include <stdlib.h>
 /**
  * @brief        : 建立socket
  * @param         {char} *ip: ip地址

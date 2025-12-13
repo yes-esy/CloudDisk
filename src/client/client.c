@@ -1,15 +1,16 @@
 /**
- * @FilePath     : /CloudDisk/src/client/Client.c
+ * @FilePath     : /CloudDisk/src/client/client.c
  * @Description  :  
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-11 22:25:14
+ * @LastEditTime : 2025-12-13 22:06:19
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
-#include "Client.h"
-#include "unistd.h"
-#include "Net.h"
+#include "client.h"
+#include <unistd.h>
+#include "net.h"
+#include "protocol.h"
 #include <ctype.h>
 #include <string.h>
 #include <stdio.h>
@@ -91,7 +92,7 @@ int processServer(int clientFd, char *buf, int bufLen) {
         printf("server closed connection\n");
     } else {
         buf[ret] = '\0';
-        printf("recv:%s\n", buf);
+        printf("%s", buf);
     }
     return ret;
 }

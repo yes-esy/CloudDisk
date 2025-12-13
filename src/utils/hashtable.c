@@ -4,10 +4,10 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-12 23:11:37
+ * @LastEditTime : 2025-12-13 20:09:39
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
-#include "utils/HashTable.h"
+#include "hashtable.h"
 /**
  * @brief        : DJB2哈希算法,计算字符串的哈希值
  * @param         {char} *key: 待哈希的键字符串
@@ -15,8 +15,8 @@
 **/
 unsigned int hash(const char *key) {
     unsigned int hashVal = 5381; // DJB2算法推荐初始值
-    while ('\0' == *key) {
-        hashVal = (hashVal << 5) + hashVal + *key; // hashVal * 33 + c
+    while (*key != '\0') {       // 修复：应当遍历到字符串结尾
+        hashVal = (hashVal << 5) + hashVal + (unsigned char)*key; // hashVal * 33 + c
         key++;
     }
     return hashVal % MAX_SIZE;
@@ -50,7 +50,16 @@ void insert(HashTable *hashTable, const char *key, void *value) {
     unsigned int startIndex = index;
     while (hashTable->table[index].value != EMPTY) {
         if (strcmp(hashTable->table[index].key, key) == 0) {
-            hashTable->table[index].value = value;
+            // 如果key已存在,先释放旧值
+            free(hashTable->table[index].value);
+            // 分配新内存并复制
+            char *heapVal = (char *)malloc(strlen((const char *)value) + 1);
+            if (heapVal == NULL) {
+                fprintf(stderr, "malloc failed in insert\n");
+                return;
+            }
+            strcpy(heapVal, (const char *)value);
+            hashTable->table[index].value = heapVal;
             return;
         }
         index = (index + 1) % MAX_SIZE;
@@ -59,8 +68,17 @@ void insert(HashTable *hashTable, const char *key, void *value) {
             return;
         }
     }
+
+    // 为新的value分配堆内存
+    char *heapVal = (char *)malloc(strlen((const char *)value) + 1);
+    if (heapVal == NULL) {
+        fprintf(stderr, "malloc failed in insert\n");
+        return;
+    }
+    strcpy(heapVal, (const char *)value);
+
     strcpy(hashTable->table[index].key, key);
-    hashTable->table[index].value = value;
+    hashTable->table[index].value = heapVal;
     hashTable->size++;
 }
 /**
@@ -71,7 +89,7 @@ void insert(HashTable *hashTable, const char *key, void *value) {
 **/
 void *find(HashTable *hashTable, const char *key) {
     unsigned int index = hash(key);
-    unsigned int startIndex = index; 
+    unsigned int startIndex = index;
     while (hashTable->table[index].value != EMPTY) {
         if (strcmp(hashTable->table[index].key, key) == 0) {
             return hashTable->table[index].value; // 找到了,返回值

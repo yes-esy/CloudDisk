@@ -150,6 +150,18 @@ void log_log(int level, const char *file, int line, const char *fmt, ...) {
 
     unlock();
 }
+void log_cleanup(void) {
+    if (L.log_file) {
+        fclose(L.log_file);
+        L.log_file = NULL;
+    }
+    // 清理callbacks
+    for (int i = 0; i < MAX_CALLBACKS; i++) {
+        L.callbacks[i].fn = NULL;
+        L.callbacks[i].udata = NULL;
+    }
+    L.initialized = false;
+}
 
 void log_init(const char *path, int level) {
     // 如果已经初始化过,先清理
@@ -172,17 +184,4 @@ void log_init(const char *path, int level) {
     }
 
     L.initialized = true;
-}
-
-void log_cleanup(void) {
-    if (L.log_file) {
-        fclose(L.log_file);
-        L.log_file = NULL;
-    }
-    // 清理callbacks
-    for (int i = 0; i < MAX_CALLBACKS; i++) {
-        L.callbacks[i].fn = NULL;
-        L.callbacks[i].udata = NULL;
-    }
-    L.initialized = false;
 }

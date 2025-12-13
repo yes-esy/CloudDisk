@@ -1,7 +1,10 @@
 cmake_minimum_required(VERSION 3.26)
 project(CloudDisk C)
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+
+# 编译选项
 add_compile_options(
     -Wall -Wextra
     -Wno-unused-parameter
@@ -12,40 +15,76 @@ add_compile_options(
     -Wno-unused-result
 )
 
+# 导出compile_commands.json for IDE
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# 源文件目录
 set(CLIENT_SRC "src/client")
 set(SERVER_SRC "src/server")
 set(COMMON_SRC "src/common")
-set(ULTILS_SRC "src/utils")
+set(UTILS_SRC "src/utils")
+set(CONFIG_SRC "src/config")
+
+# 客户端源文件
 set(CLIENT_SRCS
     "${CLIENT_SRC}/main.c"
-    "${COMMON_SRC}/Net.c"
-    "${COMMON_SRC}/Command.c"
-    "${CLIENT_SRC}/Client.c"
+    "${CLIENT_SRC}/client.c"
+    "${COMMON_SRC}/net.c"
+    "${COMMON_SRC}/protocol.c"
+    "${UTILS_SRC}/hashtable.c"
+    "${UTILS_SRC}/log.c"
+    "${CONFIG_SRC}/config.c"
 )
+
+# 服务器源文件
 set(SERVER_SRCS
     "${SERVER_SRC}/main.c"
-    "${SERVER_SRC}/Communication.c"
-    "${COMMON_SRC}/Command.c"
-    "${COMMON_SRC}/Net.c"
-    "${ULTILS_SRC}/ThreadPool.c"
-    "${ULTILS_SRC}/LinkedList.c"
+    "${SERVER_SRC}/handler.c"
+    "${COMMON_SRC}/command.c"
+    "${COMMON_SRC}/net.c"
+    "${COMMON_SRC}/protocol.c"
+    "${UTILS_SRC}/threadpool.c"
+    "${UTILS_SRC}/list.c"
+    "${UTILS_SRC}/hashtable.c"
+    "${UTILS_SRC}/path.c"
+    "${UTILS_SRC}/log.c"
+    "${CONFIG_SRC}/config.c"
 )
 
-
-
+# 生成服务器可执行文件
 add_executable(CloudDiskServer ${SERVER_SRCS})
+
+# 生成客户端可执行文件
 add_executable(CloudDiskClient ${CLIENT_SRCS})
 
-target_include_directories(CloudDiskServer
-    PUBLIC ${PROJECT_SOURCE_DIR}/include/common
-    PUBLIC ${PROJECT_SOURCE_DIR}/include/server
-    PUBLIC ${PROJECT_SOURCE_DIR}/include/utils)
-target_include_directories(CloudDiskClient
-    PUBLIC ${PROJECT_SOURCE_DIR}/include/common
-    PUBLIC ${PROJECT_SOURCE_DIR}/include/client
-    PUBLIC ${PROJECT_SOURCE_DIR}/include/utils)
-# target_link_libraries(CloudDiskServer LINK_PUBLIC libpthread)
+# 服务器包含目录
+target_include_directories(CloudDiskServer PRIVATE
+    ${PROJECT_SOURCE_DIR}/include/common
+    ${PROJECT_SOURCE_DIR}/include/server
+    ${PROJECT_SOURCE_DIR}/include/utils
+    ${PROJECT_SOURCE_DIR}/include/config
+)
+
+# 客户端包含目录
+target_include_directories(CloudDiskClient PRIVATE
+    ${PROJECT_SOURCE_DIR}/include/common
+    ${PROJECT_SOURCE_DIR}/include/client
+    ${PROJECT_SOURCE_DIR}/include/utils
+    ${PROJECT_SOURCE_DIR}/include/config
+)
+
+# 查找线程库
 find_package(Threads REQUIRED)
-# 使用 Threads::Threads 替代直接写 libpthread
-target_link_libraries(CloudDiskServer LINK_PUBLIC Threads::Threads)
-# target_link_libraries(CloudDiskClient LINK_PUBLIC Threads::Threads)
+
+# 服务器链接线程库
+target_link_libraries(CloudDiskServer PRIVATE Threads::Threads)
+
+# 安装规则(可选)
+install(TARGETS CloudDiskServer CloudDiskClient
+    RUNTIME DESTINATION bin
+)
+
+# 打印信息
+message(STATUS "Building CloudDisk Project")
+message(STATUS "  Server sources: ${SERVER_SRCS}")
+message(STATUS "  Client sources: ${CLIENT_SRCS}")

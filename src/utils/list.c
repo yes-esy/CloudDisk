@@ -1,13 +1,15 @@
 /**
- * @FilePath     : /CloudDisk/src/utils/LinkedList.c
+ * @FilePath     : /CloudDisk/src/utils/list.c
  * @Description  :  链表.c文件
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-10 21:39:53
+ * @LastEditTime : 2025-12-13 21:17:36
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
-#include "LinkedList.h"
+#include "list.h"
+#include <stdlib.h>
+#include <stdio.h>
 /**
  * @brief        : 创建一个新的节点,创建失败程序退出
  * @param         {void} *val: 新节点的值

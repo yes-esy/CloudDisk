@@ -1,83 +1,19 @@
 /**
- * @FilePath     : /CloudDisk/src/common/Command.c
+ * @FilePath     : /CloudDisk/src/common/command.c
  * @Description  :  
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-12 23:17:25
+ * @LastEditTime : 2025-12-13 21:23:20
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
-#include "Command.h"
-#include "Net.h"
-#include "ThreadPool.h"
+#include "command.h"
+#include "net.h"
+#include "threadpool.h"
+#include "path.h"
 #include <dirent.h>
-// #include <fcntl.h>
+#include <unistd.h>
 #include <sys/stat.h>
-/**
- * @brief        : 将真实路径转换为虚拟路径
- * @param         {char} *realPath: 真实路径
- * @param         {char} *virtualPath: 输出的虚拟路径
- * @param         {size_t} virtualPathSize: 虚拟路径缓冲区大小
- * @return        {int} : 成功返回0，失败返回-1
-**/
-int realPathToVirtual(const char *realPath, char *virtualPath, size_t virtualPathSize) {
-    if (!realPath || !virtualPath || virtualPathSize == 0) {
-        return -1;
-    }
-
-    // 检查真实路径是否在云盘根目录下
-    size_t rootLen = strlen(CLOUD_DISK_ROOT);
-    if (strncmp(realPath, CLOUD_DISK_ROOT, rootLen) != 0) {
-        // 不在云盘根目录下，返回虚拟根目录
-        snprintf(virtualPath, virtualPathSize, "%s", VIRTUAL_ROOT);
-        return 0;
-    }
-
-    // 获取相对于云盘根目录的路径部分
-    const char *relativePath = realPath + rootLen;
-
-    if (strlen(relativePath) == 0) {
-        // 如果是云盘根目录，返回虚拟根目录
-        snprintf(virtualPath, virtualPathSize, "%s", VIRTUAL_ROOT);
-    } else {
-        // 构造虚拟路径
-        if (relativePath[0] == '/') {
-            snprintf(virtualPath, virtualPathSize, "%s", relativePath);
-        } else {
-            snprintf(virtualPath, virtualPathSize, "/%s", relativePath);
-        }
-    }
-
-    return 0;
-}
-/**
- * @brief        : 将虚拟路径转换为真实路径
- * @param         {char} *virtualPath: 虚拟路径
- * @param         {char} *realPath: 输出的真实路径
- * @param         {size_t} realPathSize: 真实路径缓冲区大小
- * @return        {int} : 成功返回0，失败返回-1
-**/
-int virtualPathToReal(const char *virtualPath, char *realPath, size_t realPathSize) {
-    if (!virtualPath || !realPath || realPathSize == 0) {
-        return -1;
-    }
-
-    // 如果虚拟路径是根目录
-    if (strcmp(virtualPath, VIRTUAL_ROOT) == 0) {
-        snprintf(realPath, realPathSize, "%s", CLOUD_DISK_ROOT);
-        return 0;
-    }
-
-    // 构造真实路径
-    if (virtualPath[0] == '/') {
-        snprintf(realPath, realPathSize, "%s%s", CLOUD_DISK_ROOT, virtualPath);
-    } else {
-        snprintf(realPath, realPathSize, "%s/%s", CLOUD_DISK_ROOT, virtualPath);
-    }
-
-    return 0;
-}
-
 /**
  * @brief        : 当前工作目录命令
  * @param         {task_t} *task: 任务结构
@@ -385,69 +321,6 @@ send_response:
 void userLoginCheck1(task_t *task) {
 }
 void userLoginCheck2(task_t *task) {
-}
-int getCommandType(const char *str) {
-    if (!strcmp(str, "pwd"))
-        return CMD_TYPE_PWD;
-    else if (!strcmp(str, "ls"))
-        return CMD_TYPE_LS;
-    else if (!strcmp(str, "cd"))
-        return CMD_TYPE_CD;
-    else if (!strcmp(str, "mkdir"))
-        return CMD_TYPE_MKDIR;
-    else if (!strcmp(str, "rmdir"))
-        return CMD_TYPE_RMDIR;
-    else if (!strcmp(str, "puts"))
-        return CMD_TYPE_PUTS;
-    else if (!strcmp(str, "gets"))
-        return CMD_TYPE_GETS;
-    else
-        return CMD_TYPE_NOTCMD;
-}
-/**
- * @brief        : 分割字符串
- * @return        {*}
-**/
-void splitString(const char *pstrs, const char *delimiter, char *tokens[], int max_tokens,
-                 int *pcount) {
-    int token_count = 0;
-    char *token = strtok((char *)pstrs, delimiter); // 使用delimiter作为分隔符
-
-    while (token != NULL && token_count < max_tokens - 1) { // 保留一个位置给NULL终止符
-        char *pstr = (char *)calloc(1, strlen(token) + 1);
-        strcpy(pstr, token);
-        tokens[token_count] = pstr; //保存申请的堆空间首地址
-        token_count++;
-        token = strtok(NULL, delimiter); // 继续获取下一个token
-    }
-    // 添加NULL终止符
-    tokens[token_count] = NULL;
-    *pcount = token_count;
-}
-/**
- * @brief        : 解析命令
- * @param         {char} *input: 输入的内容
- * @param         {int} len: 长度
- * @param         {packet_t} *pt: 数据包
- * @return        {int} : 返回0
-**/
-int parseCommand(const char *input, int len, packet_t *pt) {
-    char *pstrs[10] = {0};
-    int cnt = 0;
-    splitString(input, " ", pstrs, 10, &cnt);
-    pt->cmdType = getCommandType(pstrs[0]);
-    //暂时限定命令行格式为：
-    //1. cmd
-    //2. cmd content
-    if (cnt > 1) {
-        pt->len = strlen(pstrs[1]);
-        strncpy(pt->buff, pstrs[1], pt->len);
-    } else {
-        // 当只有命令没有参数时，长度为0
-        pt->len = 0;
-        pt->buff[0] = '\0';
-    }
-    return 0;
 }
 /**
  * @brief        : 执行命令
