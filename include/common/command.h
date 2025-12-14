@@ -9,10 +9,6 @@
 #define CLOUDDISK_COMMAND_H
 
 #include "types.h"
-
-/* 前向声明 */
-typedef struct task_t task_t;
-
 /**
  * @brief 执行pwd命令
  * @param task 任务结构

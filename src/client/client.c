@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-13 22:06:19
+ * @LastEditTime : 2025-12-14 23:07:25
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "client.h"
@@ -14,6 +14,74 @@
 #include <ctype.h>
 #include <string.h>
 #include <stdio.h>
+/**
+ * @brief 发送请求给服务器
+ * @param clientFd 客户端socket
+ * @param packet 数据包
+ * @return 成功返回发送字节数,失败返回-1
+ */
+int sendRequest(int clientFd, const packet_t *packet) {
+    if (!packet) {
+        return -1;
+    }
+
+    // 计算发送大小: len(4) + cmdType(4) + data(len)
+    size_t totalSize = sizeof(packet->len) + sizeof(packet->cmdType) + packet->len;
+
+    // 发送整个包
+    int ret = sendn(clientFd, packet, totalSize);
+    if (ret != (int)totalSize) {
+        perror("sendRequest: sendn failed");
+        return -1;
+    }
+
+    return ret;
+}
+/**
+ * @brief 接收服务器响应(只负责接收,不处理数据)
+ * @param clientFd 客户端socket
+ * @param buf 接收缓冲区
+ * @param bufLen 缓冲区大小
+ * @param statusCode 输出参数:状态码
+ * @param dataType 输出参数:数据类型
+ * @return 成功返回接收的数据长度,失败返回-1,连接关闭返回0
+ */
+int recvResponse(int clientFd, char *buf, int bufLen, ResponseStatus *statusCode,
+                 DataType *dataType) {
+    if (!buf || bufLen <= 0 || !statusCode || !dataType) {
+        return -1;
+    }
+    // 1. 接收响应头
+    response_header_t header;
+    int ret = recvn(clientFd, &header, sizeof(header));
+    if (ret != sizeof(header)) {
+        if (ret == 0) {
+            return 0; // 连接关闭
+        }
+        perror("recv response header");
+        return -1;
+    }
+    // 2. 转换网络字节序并恢复枚举类型
+    uint32_t dataLen = ntohl(header.dataLen);
+    *statusCode = (ResponseStatus)ntohl((uint32_t)header.statusCode);
+    *dataType = (DataType)ntohl((uint32_t)header.dataType);
+    // 3. 检查数据长度
+    if (dataLen == 0) {
+        return 0;
+    }
+    if (dataLen >= (uint32_t)bufLen) {
+        fprintf(stderr, "Response too large: %u bytes (buffer: %d)\n", dataLen, bufLen);
+        return -1;
+    }
+    // 4. 接收响应数据
+    ret = recvn(clientFd, buf, dataLen);
+    if (ret != (int)dataLen) {
+        perror("recv response data");
+        return -1;
+    }
+    buf[ret] = '\0';
+    return ret;
+}
 /**
  * @brief        : 处理输入
  * @param         {char} *buf: 输入缓冲区
@@ -53,25 +121,34 @@ int processStdin(char *buf, size_t buflen) {
     return (int)ret;
 }
 /**
- * @brief        : 处理命令发送
- * @param         {int} clientFd: client socket
- * @param         {packet_t} *packet: 数据包
- * @param         {char} *buf: 缓冲区
- * @return        {int} 状态码 <0 错误,
-**/
+ * @brief 处理命令(解析并发送)
+ * @param clientFd 客户端socket
+ * @param packet 数据包缓冲区
+ * @param buf 用户输入缓冲区
+ * @return 成功返回0,失败返回-1
+ */
 int processCommand(int clientFd, packet_t *packet, char *buf) {
     if (!packet || !buf) {
-        perror("packet or buf is NULL");
+        fprintf(stderr, "Invalid parameters\n");
         return -1;
     }
+
+    // 1. 清空并解析命令
     memset(packet, 0, sizeof(packet_t));
     parseCommand(buf, strlen(buf), packet);
-    if (sendn(clientFd, packet, 4 + 4 + packet->len) < 0) {
-        perror("sendn");
+
+    // 2. 发送请求
+    int ret = sendRequest(clientFd, packet);
+    if (ret < 0) {
+        fprintf(stderr, "Failed to send command\n");
         return -1;
     }
+
+    // 3. 特殊命令处理(如 PUTS 需要后续文件传输)
     if (packet->cmdType == CMD_TYPE_PUTS) {
+        // TODO: 处理文件上传
     }
+
     return 0;
 }
 /**
@@ -82,17 +159,50 @@ int processCommand(int clientFd, packet_t *packet, char *buf) {
  * @return        {int} 状态码<0错误
 **/
 int processServer(int clientFd, char *buf, int bufLen) {
+    ResponseStatus statusCode;
+    DataType dataType;
     if (!buf || bufLen <= 0) {
         return -1;
     }
-    int ret = recv(clientFd, buf, bufLen - 1, 0);
-    if (ret < 0) {
-        perror("recv");
-    } else if (ret == 0) {
-        printf("server closed connection\n");
-    } else {
-        buf[ret] = '\0';
+    // 接收响应
+    int ret = recvResponse(clientFd, buf, bufLen, &statusCode, &dataType);
+    if (ret <= 0) {
+        if (ret == 0) {
+            printf("server closed connection\n");
+        } else {
+            perror("recv");
+        }
+        return ret;
+    }
+    // 处理状态码
+    if (statusCode != STATUS_SUCCESS) {
+        fprintf(stderr, "[Server Error] ");
+        switch (statusCode) {
+            case STATUS_FAIL:
+                fprintf(stderr, "Operation failed\n");
+                break;
+            case STATUS_NOT_FOUND:
+                fprintf(stderr, "Resource not found\n");
+                break;
+            case STATUS_PERMISSION_DENIED:
+                fprintf(stderr, "Permission denied\n");
+                break;
+            case STATUS_INVALID_PARAM:
+                fprintf(stderr, "Invalid parameter\n");
+                break;
+            default:
+                fprintf(stderr, "Unknown error (code: %d)\n", statusCode);
+                break;
+        }
+    }
+    // 根据数据类型处理数据
+    if (dataType == DATA_TYPE_TEXT) {
         printf("%s", buf);
+    } else if (dataType == DATA_TYPE_BINARY) {
+        // 二进制数据处理(例如保存文件)
+        printf("[Binary data received: %d bytes]\n", ret);
+        // TODO: 保存到文件
+        // saveToFile(buf, ret);
     }
     return ret;
 }

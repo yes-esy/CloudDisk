@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-13 21:21:48
+ * @LastEditTime : 2025-12-13 23:33:07
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "net.h"
@@ -152,7 +152,7 @@ ssize_t recvn(int socketFd, void *buff, size_t len) {
         perror("recv");
         return -1;
     }
-    return ret;
+    return len;
 }
 /**
  * @brief        : 创建TCP连接

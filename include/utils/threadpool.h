@@ -10,18 +10,6 @@
 
 #include <pthread.h>
 #include "types.h"
-
-/**
- * @brief 任务结构
- */
-typedef struct task_t {
-    int peerFd;                  /* 与client通信的套接字 */
-    int epFd;                    /* epoll实例 */
-    char data[TASK_DATA_SIZE];   /* 任务数据 */
-    struct task_t *pNext;        /* 下一个任务 */
-    CmdType type;                /* 命令类型 */
-} task_t;
-
 /**
  * @brief 任务队列结构
  */

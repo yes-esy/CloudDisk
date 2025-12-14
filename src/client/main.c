@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-13 22:03:32
+ * @LastEditTime : 2025-12-14 22:06:38
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
  **/
 #include "net.h"
@@ -15,7 +15,7 @@
 
 int main(int argc, char **argv) {
     int clientFd = tcpConnect("127.0.0.1", 8080);
-    char buf[256] = {0};
+    char buf[1024] = {0};
     fd_set rdset;
     packet_t packet;
     print_welcome();

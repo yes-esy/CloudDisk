@@ -12,6 +12,8 @@
 #include <arpa/inet.h>
 #include <sys/epoll.h>
 #include "macros.h"
+#include "types.h"
+#include "log.h"
 /**
  * @brief 接收n字节数据
  * @param socketFd socket文件描述符

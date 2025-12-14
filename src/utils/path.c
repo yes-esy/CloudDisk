@@ -73,3 +73,70 @@ int virtualPathToReal(const char *virtualPath, char *realPath, size_t realPathSi
 
     return 0;
 }
+
+/**
+ * @brief 获取文件完整路径
+ * @param fileName 文件名
+ * @param path 目录路径
+ * @param fileFullPath 输出的完整路径
+ */
+void getFileFullPath(const char *fileName, const char *path, char *fileFullPath) {
+    if (fileName == NULL || path == NULL || fileFullPath == NULL) {
+        return;
+    }
+
+    size_t pathLen = strlen(path);
+
+    // 检查路径是否以 / 结尾
+    if (pathLen > 0 && path[pathLen - 1] == '/') {
+        // 路径已经有 /,直接拼接
+        snprintf(fileFullPath, PATH_MAX_LENGTH, "%s%s", path, fileName);
+    } else {
+        // 路径没有 /,需要添加
+        snprintf(fileFullPath, PATH_MAX_LENGTH, "%s/%s", path, fileName);
+    }
+}
+
+/**
+ * @brief 获取目录完整路径
+ * @param path 当前目录路径
+ * @param directoryName 目录名
+ * @param fullPath 输出的完整路径
+ * @return 成功返回0,失败返回-1
+ */
+int getDirectoryFullPath(const char *path, const char *directoryName, char *fullPath) {
+    if (!path || !directoryName || !fullPath) {
+        return -1;
+    }
+
+    // 检查目录名是否为空
+    if (directoryName[0] == '\0') {
+        return -1;
+    }
+
+    size_t pathLen = strlen(path);
+    size_t nameLen = strlen(directoryName);
+
+    // 检查长度是否会溢出
+    if (pathLen + nameLen + 2 > PATH_MAX_LENGTH) {
+        fullPath[0] = '\0';
+        return -1;
+    }
+
+    // 处理绝对路径
+    if (directoryName[0] == '/') {
+        snprintf(fullPath, PATH_MAX_LENGTH, "%s", directoryName);
+        return 0;
+    }
+
+    // 拼接路径
+    if (pathLen > 0 && path[pathLen - 1] == '/') {
+        // 路径已经有 /,直接拼接
+        snprintf(fullPath, PATH_MAX_LENGTH, "%s%s", path, directoryName);
+    } else {
+        // 路径没有 /,需要添加
+        snprintf(fullPath, PATH_MAX_LENGTH, "%s/%s", path, directoryName);
+    }
+
+    return 0;
+}

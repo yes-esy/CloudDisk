@@ -11,8 +11,27 @@
 #include <sys/select.h>
 #include <types.h>
 #include <stdio.h>
+#include "types.h"
 #define PROMPT "CloudDisk> "
 
+/**
+ * @brief 发送请求给服务器
+ * @param clientFd 客户端socket
+ * @param packet 数据包
+ * @return 成功返回发送字节数,失败返回-1
+ */
+int sendRequest(int clientFd, const packet_t *packet);
+/**
+ * @brief 接收服务器响应
+ * @param clientFd 客户端socket
+ * @param buf 接收缓冲区
+ * @param bufLen 缓冲区大小
+ * @param statusCode 输出:状态码
+ * @param dataType 输出:数据类型
+ * @return 成功返回数据长度,失败返回-1,连接关闭返回0
+ */
+int recvResponse(int clientFd, char *buf, int bufLen, ResponseStatus *statusCode,
+                 DataType *dataType);
 static void print_prompt() {
     printf("%s", PROMPT);
     fflush(stdout); // 立即刷新输出缓冲区
