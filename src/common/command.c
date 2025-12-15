@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-14 23:37:18
+ * @LastEditTime : 2025-12-15 22:54:16
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "command.h"
@@ -17,9 +17,9 @@
 #include <dirent.h>
 #include "log.h"
 #include <time.h>
-/**
- * @brief 发送响应给客户端
- */
+#include <limits.h>
+#include <stdlib.h>
+static char currentVirtualPath[PATH_MAX_LENGTH] = "/";
 /**
  * @brief 发送响应给客户端
  */
@@ -57,49 +57,25 @@ ssize_t sendResponse(int peerFd, ResponseStatus statusCode, DataType dataType, c
 **/
 void pwdCommand(task_t *task) {
     log_info("Executing pwd command (fd=%d)", task->peerFd);
-
     ResponseStatus statusCode = STATUS_SUCCESS;
-    char realPath[PATH_MAX_LENGTH] = {0};
-    char virtualPath[PATH_MAX_LENGTH] = {0};
     char response[RESPONSE_LENGTH] = {0};
     size_t responseLen = 0;
 
-    // 获取当前真实工作目录
-    if (getcwd(realPath, sizeof(realPath)) == NULL) {
-        log_error("getcwd failed: %s", strerror(errno));
-        statusCode = STATUS_FAIL;
-        responseLen = snprintf(response, sizeof(response), "pwd error: %s\n", strerror(errno));
-        goto send_response;
-    }
+    // 直接返回当前虚拟路径，无需进行路径转换
+    log_debug("Current virtual path: %s", currentVirtualPath);
+    responseLen = snprintf(response, sizeof(response), "%s\n", currentVirtualPath);
 
-    log_debug("Real path: %s", realPath);
-
-    // 将真实路径转换为虚拟路径
-    if (realPathToVirtual(realPath, virtualPath, sizeof(virtualPath)) != 0) {
-        log_error("Path conversion failed: %s", realPath);
-        statusCode = STATUS_FAIL;
-        responseLen = snprintf(response, sizeof(response), "pwd error: path conversion failed\n");
-        goto send_response;
-    }
-
-    log_debug("Virtual path: %s", virtualPath);
-    responseLen = snprintf(response, sizeof(response), "%s\n", virtualPath);
-
-send_response:
     if (sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, responseLen) < 0) {
         log_error("pwd: Failed to send response to client (fd=%d)", task->peerFd);
     } else {
-        log_info("pwd command completed: status=%d, path=%s", statusCode,
-                 statusCode == STATUS_SUCCESS ? virtualPath : "error");
+        log_info("pwd command completed: status=%d, path=%s", statusCode, currentVirtualPath);
     }
 }
-
 /**
  * @brief 列出目录内容命令
  */
 void lsCommand(task_t *task) {
     log_info("Executing ls command (fd=%d)", task->peerFd);
-
     ResponseStatus statusCode = STATUS_SUCCESS;
     char realPath[PATH_MAX_LENGTH] = {0};
     char response[RESPONSE_LENGTH] = {0};
@@ -107,8 +83,8 @@ void lsCommand(task_t *task) {
     int count = 0;
 
     // 转换虚拟路径到真实路径
-    if (virtualPathToReal(VIRTUAL_ROOT, realPath, sizeof(realPath)) < 0) {
-        log_error("Virtual path conversion failed: %s", VIRTUAL_ROOT);
+    if (virtualPathToReal(currentVirtualPath, realPath, sizeof(realPath)) < 0) {
+        log_error("Virtual path conversion failed: %s", currentVirtualPath);
         statusCode = STATUS_FAIL;
         offset = snprintf(response, sizeof(response), "ls error: path conversion failed\n");
         goto send_response;
@@ -232,6 +208,116 @@ send_response:
 }
 
 void cdCommand(task_t *task) {
+    log_info("Executing cd command (fd=%d)", task->peerFd);
+    char currentRealPath[PATH_MAX_LENGTH];
+    char response[RESPONSE_LENGTH];
+    char directoryFullPath[PATH_MAX_LENGTH];
+    char resolvedPath[PATH_MAX_LENGTH];
+    char newVirtualPath[PATH_MAX_LENGTH];
+    ResponseStatus statusCode = STATUS_SUCCESS;
+    ssize_t responseLen = 0;
+
+    // 1. 检查参数是否为空
+    if (task->data[0] == '\0') {
+        log_error("cd: Empty directory name");
+        statusCode = STATUS_INVALID_PARAM;
+        responseLen =
+            snprintf(response, sizeof(response), "cd error: directory name cannot be empty\n");
+        goto send_response;
+    }
+
+    log_debug("Changing to directory: %s", task->data);
+
+    // 2. 获取当前真实路径
+    if (virtualPathToReal(currentVirtualPath, currentRealPath, sizeof(currentRealPath)) < 0) {
+        log_error("Path conversion failed: %s", currentVirtualPath);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "cd error: path conversion failed\n");
+        goto send_response;
+    }
+
+    log_debug("Current real path: %s", currentRealPath);
+
+    // 3. 获取目标目录的完整路径 (参数顺序: fileName, path, fullPath)
+    if (getFileFullPath(task->data, currentRealPath, directoryFullPath) < 0) {
+        log_error("get full path failed: current path %s, next path %s", currentRealPath,
+                  task->data);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "cd error: get full path failed.\n");
+        goto send_response;
+    }
+
+    log_debug("Target directory full path: %s", directoryFullPath);
+
+    // 4. 使用 realpath 规范化路径（处理 .. 和 . 等相对路径）
+    if (realpath(directoryFullPath, resolvedPath) == NULL) {
+        log_error("realpath failed: %s: %s", directoryFullPath, strerror(errno));
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response),
+                               "cd error: '%s' does not exist or permission denied\n", task->data);
+        goto send_response;
+    }
+
+    log_debug("Resolved path: %s", resolvedPath);
+
+    // 5. 检查解析后的路径是否在云盘根目录下
+    if (strncmp(resolvedPath, CLOUD_DISK_ROOT, strlen(CLOUD_DISK_ROOT)) != 0) {
+        log_error("Path outside cloud disk root: %s", resolvedPath);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response),
+                               "cd error: cannot access path outside cloud disk\n");
+        goto send_response;
+    }
+
+    // 6. 检查是否为目录
+    struct stat st;
+    if (stat(resolvedPath, &st) != 0) {
+        log_error("stat failed for: %s", resolvedPath);
+        statusCode = STATUS_FAIL;
+        responseLen =
+            snprintf(response, sizeof(response), "cd error: cannot access '%s'\n", task->data);
+        goto send_response;
+    }
+
+    if (!S_ISDIR(st.st_mode)) {
+        log_error("Target is not a directory: %s", resolvedPath);
+        statusCode = STATUS_FAIL;
+        responseLen =
+            snprintf(response, sizeof(response), "cd error: '%s' is not a directory\n", task->data);
+        goto send_response;
+    }
+
+    // 7. 检查执行权限（目录需要执行权限才能进入）
+    // if (access(resolvedPath, X_OK) != 0) {
+    //     log_error("No execute permission for directory: %s", resolvedPath);
+    //     statusCode = STATUS_FAIL;
+    //     responseLen = snprintf(response, sizeof(response), "cd error: permission denied\n");
+    //     goto send_response;
+    // }
+
+    // 8. 将真实路径转换为虚拟路径
+    if (realPathToVirtual(resolvedPath, newVirtualPath, sizeof(newVirtualPath)) != 0) {
+        log_error("Failed to convert real path to virtual: %s", resolvedPath);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "cd error: path conversion failed\n");
+        goto send_response;
+    }
+
+    // 9. 更新当前虚拟路径
+    strncpy(currentVirtualPath, newVirtualPath, sizeof(currentVirtualPath) - 1);
+    currentVirtualPath[sizeof(currentVirtualPath) - 1] = '\0';
+
+    log_info("Changed directory to: %s (virtual: %s)", resolvedPath, currentVirtualPath);
+    responseLen =
+        snprintf(response, sizeof(response), "Changed to directory: %s\n", currentVirtualPath);
+
+send_response:
+    if (sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, responseLen) < 0) {
+        log_error("cd: Failed to send response to client (fd=%d)", task->peerFd);
+    } else {
+        log_info("cd command completed: status=%d, new_path=%s", statusCode,
+                 statusCode == STATUS_SUCCESS ? currentVirtualPath : "error");
+    }
 }
 /**
  * @brief 创建目录命令
@@ -239,13 +325,11 @@ void cdCommand(task_t *task) {
  */
 void mkdirCommand(task_t *task) {
     log_info("Executing mkdir command (fd=%d)", task->peerFd);
-
     ResponseStatus statusCode = STATUS_SUCCESS;
     char currentRealPath[PATH_MAX_LENGTH] = {0};
     char directoryFullPath[PATH_MAX_LENGTH] = {0};
     char response[RESPONSE_BUFF_SIZE] = {0};
     size_t responseLen = 0;
-
     // 1. 检查目录名是否为空
     if (task->data[0] == '\0') {
         log_error("mkdir: Empty directory name");
@@ -254,29 +338,23 @@ void mkdirCommand(task_t *task) {
             snprintf(response, sizeof(response), "mkdir error: directory name cannot be empty\n");
         goto send_response;
     }
-
     log_debug("Directory to create: %s", task->data);
-
     // 2. 转换虚拟路径到真实路径
-    if (virtualPathToReal(VIRTUAL_ROOT, currentRealPath, sizeof(currentRealPath)) < 0) {
-        log_error("Virtual path conversion failed: %s", VIRTUAL_ROOT);
+    if (virtualPathToReal(currentVirtualPath, currentRealPath, sizeof(currentRealPath)) < 0) {
+        log_error("Virtual path conversion failed: %s", currentVirtualPath);
         statusCode = STATUS_FAIL;
         responseLen = snprintf(response, sizeof(response), "mkdir error: path conversion failed\n");
         goto send_response;
     }
-
     log_debug("Current real path: %s", currentRealPath);
-
     // 3. 获取目标目录的完整路径
-    if (getDirectoryFullPath(task->data, currentRealPath, directoryFullPath) < 0) {
+    if (getDirectoryFullPath(currentRealPath, task->data, directoryFullPath) < 0) {
         log_error("Failed to get full path: %s", task->data);
         statusCode = STATUS_FAIL;
         responseLen = snprintf(response, sizeof(response), "mkdir error: invalid directory path\n");
         goto send_response;
     }
-
     log_debug("Full directory path: %s", directoryFullPath);
-
     // 4. 检查目录是否已存在
     struct stat st;
     if (stat(directoryFullPath, &st) == 0) {
@@ -328,9 +406,138 @@ send_response:
     }
 }
 
+/**
+ * @brief 删除目录命令
+ * @param task 任务结构
+ */
 void rmdirCommand(task_t *task) {
-}
+    log_info("Executing rmdir command (fd=%d)", task->peerFd);
+    ResponseStatus statusCode = STATUS_SUCCESS;
+    char currentRealPath[PATH_MAX_LENGTH] = {0};
+    char directoryFullPath[PATH_MAX_LENGTH] = {0};
+    char response[RESPONSE_BUFF_SIZE] = {0};
+    size_t responseLen = 0;
 
+    // 1. 检查目录名是否为空
+    if (task->data[0] == '\0') {
+        log_error("rmdir: Empty directory name");
+        statusCode = STATUS_INVALID_PARAM;
+        responseLen =
+            snprintf(response, sizeof(response), "rmdir error: directory name cannot be empty\n");
+        goto send_response;
+    }
+
+    log_debug("Directory to remove: %s", task->data);
+
+    // 2. 检查是否试图删除当前目录或父目录
+    if (strcmp(task->data, ".") == 0 || strcmp(task->data, "..") == 0) {
+        log_error("rmdir: Cannot remove current or parent directory");
+        statusCode = STATUS_INVALID_PARAM;
+        responseLen = snprintf(response, sizeof(response),
+                               "rmdir error: cannot remove '.' or '..' directory\n");
+        goto send_response;
+    }
+
+    // 3. 转换虚拟路径到真实路径
+    if (virtualPathToReal(currentVirtualPath, currentRealPath, sizeof(currentRealPath)) < 0) {
+        log_error("Virtual path conversion failed: %s", currentVirtualPath);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "rmdir error: path conversion failed\n");
+        goto send_response;
+    }
+
+    log_debug("Current real path: %s", currentRealPath);
+
+    // 4. 获取目标目录的完整路径
+    if (getDirectoryFullPath(currentRealPath, task->data, directoryFullPath) < 0) {
+        log_error("Failed to get full path: %s", task->data);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "rmdir error: invalid directory path\n");
+        goto send_response;
+    }
+
+    log_debug("Full directory path: %s", directoryFullPath);
+
+    // 5. 检查目录是否存在
+    struct stat st;
+    if (stat(directoryFullPath, &st) != 0) {
+        log_error("Directory does not exist: %s", directoryFullPath);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response),
+                               "rmdir error: directory '%s' does not exist\n", task->data);
+        goto send_response;
+    }
+
+    // 6. 检查是否为目录
+    if (!S_ISDIR(st.st_mode)) {
+        log_error("Target is not a directory: %s", directoryFullPath);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "rmdir error: '%s' is not a directory\n",
+                               task->data);
+        goto send_response;
+    }
+
+    // 7. 检查目录是否为空
+    DIR *dir = opendir(directoryFullPath);
+    if (dir == NULL) {
+        log_error("Cannot open directory: %s: %s", directoryFullPath, strerror(errno));
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response),
+                               "rmdir error: cannot access directory '%s'\n", task->data);
+        goto send_response;
+    }
+
+    struct dirent *entry;
+    int isEmpty = 1;
+    while ((entry = readdir(dir)) != NULL) {
+        // 跳过 "." 和 ".." 条目
+        if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
+            isEmpty = 0;
+            break;
+        }
+    }
+    closedir(dir);
+
+    if (!isEmpty) {
+        log_error("Directory not empty: %s", directoryFullPath);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response),
+                               "rmdir error: directory '%s' is not empty\n", task->data);
+        goto send_response;
+    }
+
+    // 8. 删除目录
+    if (rmdir(directoryFullPath) < 0) {
+        log_error("rmdir failed: %s: %s", directoryFullPath, strerror(errno));
+        statusCode = STATUS_FAIL;
+
+        // 根据错误类型提供详细信息
+        if (errno == EACCES) {
+            responseLen = snprintf(response, sizeof(response), "rmdir error: permission denied\n");
+        } else if (errno == EBUSY) {
+            responseLen = snprintf(response, sizeof(response), "rmdir error: directory is busy\n");
+        } else if (errno == ENOTEMPTY) {
+            responseLen =
+                snprintf(response, sizeof(response), "rmdir error: directory not empty\n");
+        } else {
+            responseLen =
+                snprintf(response, sizeof(response), "rmdir error: %s\n", strerror(errno));
+        }
+        goto send_response;
+    }
+
+    // 9. 成功删除
+    log_info("Directory removed successfully: %s", directoryFullPath);
+    responseLen =
+        snprintf(response, sizeof(response), "Directory '%s' removed successfully\n", task->data);
+
+send_response:
+    if (sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, responseLen) < 0) {
+        log_error("rmdir: Failed to send response to client (fd=%d)", task->peerFd);
+    } else {
+        log_info("rmdir command completed: status=%d, dir=%s", statusCode, task->data);
+    }
+}
 /**
  * @brief        : 未识别命令处理
  * @param         {task_t} *task: 任务结构

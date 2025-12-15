@@ -9,6 +9,8 @@
 #include "types.h"
 #include <string.h>
 #include <stdio.h>
+#include <sys/stat.h>
+#include <unistd.h>
 /**
  * @brief        : 将真实路径转换为虚拟路径
  * @param         {char} *realPath: 真实路径
@@ -80,9 +82,9 @@ int virtualPathToReal(const char *virtualPath, char *realPath, size_t realPathSi
  * @param path 目录路径
  * @param fileFullPath 输出的完整路径
  */
-void getFileFullPath(const char *fileName, const char *path, char *fileFullPath) {
+int getFileFullPath(const char *fileName, const char *path, char *fileFullPath) {
     if (fileName == NULL || path == NULL || fileFullPath == NULL) {
-        return;
+        return -1;
     }
 
     size_t pathLen = strlen(path);
@@ -95,6 +97,7 @@ void getFileFullPath(const char *fileName, const char *path, char *fileFullPath)
         // 路径没有 /,需要添加
         snprintf(fileFullPath, PATH_MAX_LENGTH, "%s/%s", path, fileName);
     }
+    return 0;
 }
 
 /**
@@ -139,4 +142,26 @@ int getDirectoryFullPath(const char *path, const char *directoryName, char *full
     }
 
     return 0;
+}
+/**
+ * @brief        : 检查路径是否存在且可访问
+ * @param         {const char *} pathname: 待检查的路径字符串
+ * @return        {int} : 
+ *                  1  -> 路径存在且可访问
+ *                  0  -> 路径不存在或无法访问
+ */
+int isPathAccessible(const char *pathname) {
+    if (!pathname || pathname[0] == '\0') {
+        return 0;
+    }
+
+    // 检查路径是否存在且可读取
+    if (access(pathname, F_OK) == 0) {
+        // 路径存在，进一步检查是否可访问
+        if (access(pathname, R_OK) == 0) {
+            return 1; // 存在且可读
+        }
+    }
+
+    return 0; // 不存在或无法访问
 }

@@ -28,7 +28,7 @@ int realPathToVirtual(const char *realPath, char *virtualPath, size_t virtualPat
  */
 int virtualPathToReal(const char *virtualPath, char *realPath, size_t realPathSize);
 
-void getFileFullPath(const char * fileName,const char * path,char * fileFullPath);
+int getFileFullPath(const char * fileName,const char * path,char * fileFullPath);
 int getDirectoryFullPath(const char *path, const char *directoryName, char *fullPath);
-
+int isPathAccessible(const char *pathname);
 #endif /* CLOUDDISK_PATH_H */
