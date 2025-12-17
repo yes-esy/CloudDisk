@@ -35,6 +35,6 @@ void splitString(const char *pstrs, const char *delimiter, char *tokens[],
  * @param pt 输出的数据包
  * @return 成功返回0,失败返回-1
  */
-int parseCommand(const char *pinput, int len, packet_t *pt);
+int parseCommand(const char *pinput, int len, packet_t *pt,char * processedArgs);
 
 #endif /* CLOUDDISK_PROTOCOL_H */

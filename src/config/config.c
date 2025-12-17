@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-13 16:33:45
+ * @LastEditTime : 2025-12-16 22:16:27
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "config.h"
@@ -65,4 +65,46 @@ int readConfig(const char *path, HashTable *hashtable) {
 
     fclose(configFile);
     return 0;
+}
+int runArgsLoad(RunArgs *args, const char *configPath) {
+    if (!args || !configPath)
+        return -1;
+    memset(args, 0, sizeof(*args));
+
+    args->ht = (HashTable *)malloc(sizeof(HashTable));
+    if (!args->ht)
+        return -1;
+    initHashTable(args->ht);
+
+    if (readConfig(configPath, args->ht) != 0)
+        return -1;
+
+    const char *threadNumStr = (const char *)find(args->ht, "thread_num");
+    args->ip = (const char *)find(args->ht, "ip");
+    args->port = (const char *)find(args->ht, "port");
+    args->logFile = (const char *)find(args->ht, "log_path");
+    args->workFolder = (const char *)find(args->ht, "work_folder");
+
+    if (!threadNumStr || !args->ip || !args->port) {
+        fprintf(stderr, "config missing required keys: threadNum/ip/port\n");
+        return -1;
+    }
+
+    args->threadNum = atoi(threadNumStr);
+    if (args->threadNum <= 0) {
+        fprintf(stderr, "invalid threadNum: %s\n", threadNumStr);
+        return -1;
+    }
+
+    return 0;
+}
+
+void runArgsFree(RunArgs *args) {
+    if (!args)
+        return;
+    if (args->ht) {
+        destroyHashTable(args->ht);
+        free(args->ht);
+    }
+    memset(args, 0, sizeof(*args));
 }

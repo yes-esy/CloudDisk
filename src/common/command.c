@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-15 22:54:16
+ * @LastEditTime : 2025-12-17 22:20:22
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "command.h"
@@ -18,7 +18,9 @@
 #include "log.h"
 #include <time.h>
 #include <limits.h>
+#include <fcntl.h>
 #include <stdlib.h>
+
 static char currentVirtualPath[PATH_MAX_LENGTH] = "/";
 /**
  * @brief 发送响应给客户端
@@ -563,10 +565,166 @@ void notCommand(task_t *task) {
         log_info("Sent command help to client (fd=%d)", task->peerFd);
     }
 }
-
 void putsCommand(task_t *task) {
-}
+    log_info("Executing puts command (fd=%d)", task->peerFd);
+    ResponseStatus statusCode = STATUS_SUCCESS;
+    char fileDestVirtualPath[PATH_MAX_LENGTH] = {0}; // 文件目标虚拟路径
+    char fileDestrealPath[PATH_MAX_LENGTH] = {0}; // 文件目标真实路径
+    char fileName[FILENAME_LENGTH] = {0}; // 文件名称
+    char fileFullPath[PATH_MAX_LENGTH] = {0};
+    char response[RESPONSE_LENGTH] = {0};
+    size_t responseLen = 0;
+    int fd = -1;
 
+    // 1. 检查文件名是否为空
+    if (task->data[0] == '\0') {
+        log_error("puts: Empty filename");
+        statusCode = STATUS_INVALID_PARAM;
+        responseLen =
+            snprintf(response, sizeof(response), "puts error: filename cannot be empty\n");
+        goto send_response;
+    }
+
+    // 2. 解析文件名（从路径中提取文件名）
+    if (extractFilePathAndName(fileName, fileDestVirtualPath, task->data) < 0) {
+        log_error("Failed to extract filename from: %s", task->data);
+        strcpy(fileName, task->data); // 如果解析失败，直接使用原始数据作为文件名
+    }
+
+    log_info("File to upload: %s", fileName);
+
+    // 3. 获取当前真实路径
+    if (virtualPathToReal(fileDestVirtualPath, fileDestrealPath, sizeof(fileDestrealPath)) < 0) {
+        log_error("Virtual path conversion failed: %s", fileDestVirtualPath);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "puts error: path conversion failed\n");
+        goto send_response;
+    }
+
+    // 4. 构造完整文件路径
+    if (getFileFullPath(fileName, fileDestrealPath, fileFullPath) < 0) {
+        log_error("Failed to get full file path: %s", fileName);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "puts error: invalid file path\n");
+        goto send_response;
+    }
+
+    log_debug("Full file path: %s", fileFullPath);
+
+    // 5. 接收文件大小
+    off_t fileSize = 0;
+    int ret = recvn(task->peerFd, (void *)&fileSize, sizeof(fileSize));
+    if (ret != sizeof(fileSize)) {
+        log_error("Failed to receive file size: ret=%d", ret);
+        statusCode = STATUS_FAIL;
+        responseLen =
+            snprintf(response, sizeof(response), "puts error: failed to receive file size\n");
+        goto send_response;
+    }
+
+    fileSize = ntohl(fileSize); // 转换字节序（如果需要）
+    log_info("File size to receive: %ld bytes", fileSize);
+
+    // 6. 检查文件大小是否合理
+    if (fileSize <= 0 || fileSize > MAX_FILE_SIZE) { // 需要定义 MAX_FILE_SIZE
+        log_error("Invalid file size: %ld", fileSize);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "puts error: invalid file size\n");
+        goto send_response;
+    }
+
+    // 7. 创建文件
+    fd = open(fileFullPath, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (fd < 0) {
+        log_error("Failed to create file: %s: %s", fileFullPath, strerror(errno));
+        statusCode = STATUS_FAIL;
+        if (errno == EACCES) {
+            responseLen = snprintf(response, sizeof(response), "puts error: permission denied\n");
+        } else if (errno == ENOSPC) {
+            responseLen =
+                snprintf(response, sizeof(response), "puts error: no space left on device\n");
+        } else {
+            responseLen =
+                snprintf(response, sizeof(response), "puts error: failed to create file\n");
+        }
+        goto send_response;
+    }
+
+    // 8. 接收文件内容
+    off_t totalReceived = 0;
+    char buff[RECEIVE_FILE_BUFF_SIZE];
+
+    while (totalReceived < fileSize) {
+        off_t remaining = fileSize - totalReceived;
+        size_t toReceive =
+            (remaining < RECEIVE_FILE_BUFF_SIZE) ? remaining : RECEIVE_FILE_BUFF_SIZE;
+
+        ret = recvn(task->peerFd, buff, toReceive);
+        if (ret <= 0) {
+            log_error("Failed to receive file data: ret=%d, received=%ld/%ld", ret, totalReceived,
+                      fileSize);
+            statusCode = STATUS_FAIL;
+            responseLen =
+                snprintf(response, sizeof(response), "puts error: file transfer interrupted\n");
+            goto cleanup_file;
+        }
+
+        // 写入文件
+        ssize_t written = write(fd, buff, ret);
+        if (written != ret) {
+            log_error("Failed to write file data: written=%zd, expected=%d", written, ret);
+            statusCode = STATUS_FAIL;
+            responseLen =
+                snprintf(response, sizeof(response), "puts error: failed to write file\n");
+            goto cleanup_file;
+        }
+
+        totalReceived += ret;
+        log_debug("Received %ld/%ld bytes", totalReceived, fileSize);
+    }
+
+    // 9. 验证文件大小
+    if (totalReceived != fileSize) {
+        log_error("File size mismatch: expected=%ld, received=%ld", fileSize, totalReceived);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "puts error: file size mismatch\n");
+        goto cleanup_file;
+    }
+
+    // 10. 成功完成
+    close(fd);
+    fd = -1;
+
+    log_info("File uploaded successfully: %s (%ld bytes)", fileFullPath, fileSize);
+    responseLen = snprintf(response, sizeof(response),
+                           "File '%s' uploaded successfully (%ld bytes)\n", fileName, fileSize);
+    goto send_response;
+
+cleanup_file:
+    if (fd >= 0) {
+        close(fd);
+        fd = -1;
+        // 删除不完整的文件
+        if (unlink(fileFullPath) < 0) {
+            log_warn("Failed to remove incomplete file: %s", fileFullPath);
+        }
+    }
+
+send_response:
+    if (sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, responseLen) < 0) {
+        log_error("puts: Failed to send response to client (fd=%d)", task->peerFd);
+    } else {
+        log_info("puts command completed: status=%d, file=%s", statusCode, fileName);
+    }
+
+    // 清理资源
+    if (fd >= 0) {
+        close(fd);
+    }
+
+    // 重新添加到 epoll 监听
+    addEpollReadFd(task->epFd, task->peerFd);
+}
 void getsCommand(task_t *task) {
 }
 void userLoginCheck1(task_t *task) {

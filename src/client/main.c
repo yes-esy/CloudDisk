@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-14 22:06:38
+ * @LastEditTime : 2025-12-17 23:21:36
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
  **/
 #include "net.h"
@@ -12,9 +12,24 @@
 #include "client.h"
 #include <stdio.h>
 #include <unistd.h>
-
+#include "log.h"
+#include "config.h"
 int main(int argc, char **argv) {
-    int clientFd = tcpConnect("127.0.0.1", 8080);
+    ARGS_CHECK(argc, 2);
+
+    RunArgs args;
+    if (runArgsLoad(&args, argv[1]) != 0) {
+        fprintf(stderr, "load config failed\n");
+        runArgsFree(&args);
+        return 1;
+    }
+
+    // 日志
+    log_init(args.logFile, LOG_DEBUG);
+    log_set_quiet(true); // 禁止控制台输出
+    log_info("log init finish");
+    int port = atoi(args.port);
+    int clientFd = tcpConnect(args.ip, port);
     char buf[1024] = {0};
     fd_set rdset;
     packet_t packet;

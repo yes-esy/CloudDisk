@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <ctype.h>
 /**
  * @brief        : 将真实路径转换为虚拟路径
  * @param         {char} *realPath: 真实路径
@@ -164,4 +165,52 @@ int isPathAccessible(const char *pathname) {
     }
 
     return 0; // 不存在或无法访问
+}
+/**
+ * @brief 从完整路径中提取文件名和路径
+ * @param fileName 输出的文件名
+ * @param filePath 输出的文件路径
+ * @param src 源路径字符串
+ * @return 成功返回0，失败返回-1
+ */
+int extractFilePathAndName(char *fileName, char *filePath, const char *src) {
+    // filename destpath
+    if (!fileName || !filePath || !src) {
+        return -1;
+    }
+
+    int srcLen = strlen(src);
+    // 检查源字符串是否为空
+    if (srcLen == 0) {
+        fileName[0] = '\0';
+        filePath[0] = '\0';
+        return -1;
+    }
+    int spacePos = -1;
+    for (int i = 0; i < srcLen; i++) {
+        if (isspace(src[i])) {
+            spacePos = i;
+            break;
+        }
+    }
+    // 没有空格
+    if (spacePos == -1) {
+        return -1;
+    }
+    int index = 0;
+    for (int i = 0; i < spacePos; i++) {
+        fileName[index++] = src[i];
+    }
+    fileName[index] = '\0';
+    index = 0;
+    if (strncmp(src + spacePos + 1, "./", 2) != 0 && strncmp(src + spacePos + 1, "/", 1) != 0) {
+        strcpy(filePath, "./");
+        index += 2;
+    }
+    for (int i = spacePos + 1; i < srcLen; i++) {
+        filePath[index++] = src[i];
+    }
+    filePath[index] = '\0';
+
+    return 0;
 }

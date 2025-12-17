@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-14 23:07:25
+ * @LastEditTime : 2025-12-17 23:34:28
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "client.h"
@@ -14,6 +14,113 @@
 #include <ctype.h>
 #include <string.h>
 #include <stdio.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include "log.h"
+
+/**
+ * @brief 从处理后的参数中提取源文件路径和目标路径
+ * @param processedArgs 格式: "filename destpath"
+ * @param srcPath 输出:原始源文件路径(从原始输入恢复)
+ * @param destPath 输出:目标路径
+ * @param originalInput 原始用户输入
+ */
+void parsePutsArgs(const char *processedArgs, const char *originalInput, char *srcPath,
+                   char *destPath) {
+    // processedArgs 格式: "filename destpath"
+    // 需要从 originalInput 恢复完整源路径
+
+    // 1. 从 processedArgs 提取 filename
+    const char *space = strchr(processedArgs, ' ');
+    if (!space) {
+        srcPath[0] = '\0';
+        destPath[0] = '\0';
+        return;
+    }
+
+    // 2. 提取目标路径
+    strcpy(destPath, space + 1);
+
+    // 3. 从原始输入提取源路径(puts 后第一个参数)
+    const char *input = originalInput;
+    while (*input && isspace(*input))
+        input++; // 跳过前导空格
+    while (*input && !isspace(*input))
+        input++; // 跳过 "puts"
+    while (*input && isspace(*input))
+        input++; // 跳过空格
+
+    int i = 0;
+    while (*input && !isspace(*input)) {
+        srcPath[i++] = *input++;
+    }
+    srcPath[i] = '\0';
+}
+
+/**
+ * @brief 发送文件(优化版)
+ * @param socketFd socket描述符
+ * @param filepath 文件路径
+ * @return 成功返回0,失败返回-1
+ */
+int putsFile(int socketFd, const char *filepath) {
+    int fd = open(filepath, O_RDONLY);
+    if (fd < 0) {
+        log_error("Failed to open file: %s", filepath);
+        perror("open");
+        return -1;
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) < 0) {
+        perror("fstat");
+        close(fd);
+        return -1;
+    }
+
+    // 发送文件大小
+    uint32_t fileSize = htonl((uint32_t)st.st_size);
+    if (sendn(socketFd, &fileSize, sizeof(fileSize)) != sizeof(fileSize)) {
+        log_error("Failed to send file size");
+        close(fd);
+        return -1;
+    }
+
+    // 发送文件内容
+    off_t totalSent = 0;
+    char buff[SEND_FILE_BUFF_SIZE];
+
+    while (totalSent < st.st_size) {
+        ssize_t bytesRead = read(fd, buff, sizeof(buff));
+        if (bytesRead <= 0) {
+            if (bytesRead < 0)
+                perror("read file");
+            break;
+        }
+
+        if (sendn(socketFd, buff, bytesRead) != bytesRead) {
+            log_error("Failed to send file data");
+            break;
+        }
+
+        totalSent += bytesRead;
+        printf("\rUploading: %.1f%% (%ld/%ld bytes)", (double)totalSent / st.st_size * 100,
+               totalSent, st.st_size);
+        fflush(stdout);
+    }
+
+    printf("\n");
+    close(fd);
+
+    if (totalSent != st.st_size) {
+        log_error("File transfer incomplete: %ld/%ld bytes", totalSent, st.st_size);
+        return -1;
+    }
+
+    log_info("File uploaded successfully: %s (%ld bytes)", filepath, st.st_size);
+    return 0;
+}
+
 /**
  * @brief 发送请求给服务器
  * @param clientFd 客户端socket
@@ -133,24 +240,52 @@ int processCommand(int clientFd, packet_t *packet, char *buf) {
         return -1;
     }
 
-    // 1. 清空并解析命令
-    memset(packet, 0, sizeof(packet_t));
-    parseCommand(buf, strlen(buf), packet);
+    char processedArgs[ARGS_LENGTH] = {0};
+    char originalInput[1024];
+    strncpy(originalInput, buf, sizeof(originalInput) - 1);
 
-    // 2. 发送请求
+    // 清空并解析命令
+    memset(packet, 0, sizeof(packet_t));
+    parseCommand(buf, strlen(buf), packet, processedArgs);
+
+    // 发送请求
     int ret = sendRequest(clientFd, packet);
     if (ret < 0) {
         fprintf(stderr, "Failed to send command\n");
         return -1;
     }
 
-    // 3. 特殊命令处理(如 PUTS 需要后续文件传输)
+    // 处理 PUTS 命令
     if (packet->cmdType == CMD_TYPE_PUTS) {
-        // TODO: 处理文件上传
+        char srcPath[256] = {0};
+        char destPath[256] = {0};
+
+        parsePutsArgs(processedArgs, originalInput, srcPath, destPath);
+
+        if (srcPath[0] == '\0') {
+            fprintf(stderr, "Invalid puts command format\n");
+            return -1;
+        }
+
+        printf("Uploading: %s -> %s\n", srcPath, destPath);
+        // 上传文件
+        if (putsFile(clientFd, srcPath) < 0) {
+            return -1;
+        }
+
+        // *** 关键修复: 立即接收并处理服务器响应 ***
+        char responseBuf[1024] = {0};
+        ret = processServer(clientFd, responseBuf, sizeof(responseBuf));
+        if (ret <= 0) {
+            return -1;
+        }
+
+        return 0;
     }
 
     return 0;
 }
+
 /**
  * @brief        : 处理服务器的事件
  * @param         {int} clientFd: 客户端socket

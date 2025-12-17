@@ -21,7 +21,11 @@
 #define VIRTUAL_ROOT "/"
 #define RESPONSE_LENGTH 4096
 #define RESPONSE_BUFF_SIZE 4096
-
+#define FILENAME_LENGTH 30
+#define RECEIVE_FILE_BUFF_SIZE 1024
+#define SEND_FILE_BUFF_SIZE 1024
+#define MAX_FILE_SIZE (1024UL * 1024UL * 1024UL) /* 1 GiB */
+#define ARGS_LENGTH 256
 /* 命令类型枚举 */
 typedef enum {
     CMD_TYPE_PWD = 1,

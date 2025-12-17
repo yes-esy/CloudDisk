@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-13 21:02:20
+ * @LastEditTime : 2025-12-17 23:25:14
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
  **/
  #include "net.h"
@@ -21,57 +21,6 @@
 #include <sys/epoll.h>
 #include <sys/socket.h>
 
-typedef struct {
-    int threadNum;
-    const char *ip;
-    const char *port;
-    const char *logFile;
-    const char *workFolder;
-    HashTable *ht; // 配置哈希表(内部value为堆内存，destroyHashTable会free)
-} RunArgs;
-
-static int runArgsLoad(RunArgs *args, const char *configPath) {
-    if (!args || !configPath)
-        return -1;
-    memset(args, 0, sizeof(*args));
-
-    args->ht = (HashTable *)malloc(sizeof(HashTable));
-    if (!args->ht)
-        return -1;
-    initHashTable(args->ht);
-
-    if (readConfig(configPath, args->ht) != 0)
-        return -1;
-
-    const char *threadNumStr = (const char *)find(args->ht, "thread_num");
-    args->ip = (const char *)find(args->ht, "ip");
-    args->port = (const char *)find(args->ht, "port");
-    args->logFile = (const char *)find(args->ht, "log_path");
-    args->workFolder = (const char *)find(args->ht, "work_folder");
-
-    if (!threadNumStr || !args->ip || !args->port) {
-        fprintf(stderr, "config missing required keys: threadNum/ip/port\n");
-        return -1;
-    }
-
-    args->threadNum = atoi(threadNumStr);
-    if (args->threadNum <= 0) {
-        fprintf(stderr, "invalid threadNum: %s\n", threadNumStr);
-        return -1;
-    }
-
-    return 0;
-}
-
-static void runArgsFree(RunArgs *args) {
-    if (!args)
-        return;
-    if (args->ht) {
-        destroyHashTable(args->ht);
-        free(args->ht);
-    }
-    memset(args, 0, sizeof(*args));
-}
 
 int main(int argc, char **argv) {
     ARGS_CHECK(argc, 2);
@@ -117,7 +66,6 @@ int main(int argc, char **argv) {
         } else if (nReady == -1) {
             ERROR_CHECK(nReady, -1, "epoll_wait");
         }
-
         for (int i = 0; i < nReady; ++i) {
             int fd = pEventArr[i].data.fd;
             if (fd == listenFd) { // 监听
