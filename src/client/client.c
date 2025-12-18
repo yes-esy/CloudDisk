@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-17 23:34:28
+ * @LastEditTime : 2025-12-18 22:47:05
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "client.h"
@@ -273,13 +273,28 @@ int processCommand(int clientFd, packet_t *packet, char *buf) {
             return -1;
         }
 
-        // *** 关键修复: 立即接收并处理服务器响应 ***
-        char responseBuf[1024] = {0};
-        ret = processServer(clientFd, responseBuf, sizeof(responseBuf));
-        if (ret <= 0) {
+        char responseBuf[RESPONSE_LENGTH] = {0};
+        ResponseStatus statusCode;
+        DataType dataType;
+
+        log_debug("Waiting for upload confirmation...");
+        int ret = recvResponse(clientFd, responseBuf, sizeof(responseBuf), &statusCode, &dataType);
+        if (ret < 0) {
+            log_error("Failed to receive upload confirmation");
             return -1;
         }
 
+        if (ret == 0) {
+            log_error("Server closed connection");
+            return -1;
+        }
+
+        // 打印服务器响应
+        if (dataType == DATA_TYPE_TEXT) {
+            printf("%s", responseBuf);
+        }
+
+        log_debug("Upload complete");
         return 0;
     }
 

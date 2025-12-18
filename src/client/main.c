@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-17 23:21:36
+ * @LastEditTime : 2025-12-18 22:47:38
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
  **/
 #include "net.h"
@@ -53,6 +53,10 @@ int main(int argc, char **argv) {
             ret = processCommand(clientFd, &packet, buf);
             if (ret < 0) {
                 break;
+            }
+            if (packet.cmdType == CMD_TYPE_PUTS) {
+                print_prompt();
+                continue;
             }
         } else if (FD_ISSET(clientFd, &rdset)) {
             int ret = processServer(clientFd, buf, sizeof(buf));

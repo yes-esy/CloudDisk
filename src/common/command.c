@@ -612,9 +612,9 @@ void putsCommand(task_t *task) {
     log_debug("Full file path: %s", fileFullPath);
 
     // 5. 接收文件大小
-    off_t fileSize = 0;
-    int ret = recvn(task->peerFd, (void *)&fileSize, sizeof(fileSize));
-    if (ret != sizeof(fileSize)) {
+    uint32_t fileSizeNet = 0;
+    int ret = recvn(task->peerFd, (void *)&fileSizeNet, sizeof(fileSizeNet));
+    if (ret != sizeof(fileSizeNet)) {
         log_error("Failed to receive file size: ret=%d", ret);
         statusCode = STATUS_FAIL;
         responseLen =
@@ -622,7 +622,7 @@ void putsCommand(task_t *task) {
         goto send_response;
     }
 
-    fileSize = ntohl(fileSize); // 转换字节序（如果需要）
+    off_t fileSize = (off_t)ntohl(fileSizeNet); // 转换字节序（如果需要）
     log_info("File size to receive: %ld bytes", fileSize);
 
     // 6. 检查文件大小是否合理
