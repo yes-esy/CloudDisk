@@ -56,6 +56,26 @@ void parsePutsArgs(const char *processedArgs, const char *originalInput, char *s
     }
     srcPath[i] = '\0';
 }
+/**
+ * @brief 从处理后的参数中提取源文件路径和目标路径
+ * @param processedArgs 格式: "path/filename destpath"
+ * @param fileName 输出:原始源文件名(从原始输入恢复)
+ * @param fileDestSrc 输出:目标路径
+ * @param originalInput 原始用户输入
+ */
+void parseGetsArgs(char *processedArgs, char *fileFullPath) {
+    const char *space = strchr(processedArgs, ' ');
+    if (!space || !fileFullPath) {
+        if (fileFullPath)
+            fileFullPath[0] = '\0';
+        return;
+    }
+    size_t len = space - processedArgs;
+    if (len >= 256)
+        len = 255; // 防止溢出
+    strncpy(fileFullPath, processedArgs, len);
+    fileFullPath[len] = '\0';
+}
 
 /**
  * @brief 发送文件(优化版)
@@ -120,7 +140,65 @@ int putsFile(int socketFd, const char *filepath) {
     log_info("File uploaded successfully: %s (%ld bytes)", filepath, st.st_size);
     return 0;
 }
+/**
+ * @brief 接收文件(优化版)
+ * @param socketFd socket描述符
+ * @param filepath 文件路径
+ * @return 成功返回0,失败返回-1
+ */
+int getsFile(int socketFd, const char *fileFullPath) {
+    uint32_t fileSizeNet = 0;
+    if (recvn(socketFd, (void *)&fileSizeNet, sizeof(fileSizeNet)) != sizeof(fileSizeNet)) {
+        log_error("recv file size error");
+    }
+    uint32_t fileSize = (uint32_t)ntohl(fileSizeNet);
+    log_info("receiveed file size is %d", fileSize);
+    // 8. 接收文件内容
+    uint32_t totalReceived = 0;
+    char buff[RECEIVE_FILE_BUFF_SIZE];
+    int fd = open(fileFullPath, O_RDWR | O_CREAT, 0644);
+    while (totalReceived < fileSize) {
+        uint32_t remaining = fileSize - totalReceived;
+        size_t toReceive =
+            (remaining < RECEIVE_FILE_BUFF_SIZE) ? remaining : RECEIVE_FILE_BUFF_SIZE;
 
+        int ret = recvn(socketFd, buff, toReceive);
+        if (ret <= 0) {
+            log_error("Failed to receive file data: ret=%d, received=%ld/%ld", ret, totalReceived,
+                      fileSize);
+            goto cleanup_file;
+        }
+        // 写入文件
+        ssize_t written = write(fd, buff, ret);
+        if (written != ret) {
+            log_error("Failed to write file data: written=%zd, expected=%d", written, ret);
+            goto cleanup_file;
+        }
+        totalReceived += ret;
+        log_debug("Received %ld/%ld bytes", totalReceived, fileSize);
+    }
+
+    // 9. 验证文件大小
+    if (totalReceived != fileSize) {
+        log_error("File size mismatch: expected=%ld, received=%ld", fileSize, totalReceived);
+        goto cleanup_file;
+    }
+
+    // 10. 成功完成
+    close(fd);
+    fd = -1;
+    return 0;
+cleanup_file:
+    if (fd >= 0) {
+        close(fd);
+        fd = -1;
+        // 删除不完整的文件
+        if (unlink(fileFullPath) < 0) {
+            log_warn("Failed to remove incomplete file: %s", fileFullPath);
+        }
+    }
+    return -1;
+}
 /**
  * @brief 发送请求给服务器
  * @param clientFd 客户端socket
@@ -243,7 +321,24 @@ int processCommand(int clientFd, packet_t *packet, char *buf) {
     char processedArgs[ARGS_LENGTH] = {0};
     char originalInput[1024];
     strncpy(originalInput, buf, sizeof(originalInput) - 1);
-
+    /**
+     * 以 puts ./test/test.txt / 为例
+     * parseCommand(buf, strlen(buf), packet, processedArgs);
+     * packet 解析后结果为:
+     * packet->cmdType = CMD_TYPE_PUTS ， 
+     * packet->len = strlen("./test.txt /") 
+     * packet->buff = "test.txt /"
+     * 
+     * processedArgs 解析后结果为:
+     * processedArgs = "./test/test.txt /"
+     * 
+     * 以 gets ./test/test.txt / 为例
+     * packet 解析后结果为:
+     * packet->cmdType = CMD_TYPE_GETS ， 
+     * packet->len = strlen("./test.txt /") 
+     * packet->buff = "test.txt"
+     * processedArgs = "./test/test.txt /"
+     */
     // 清空并解析命令
     memset(packet, 0, sizeof(packet_t));
     parseCommand(buf, strlen(buf), packet, processedArgs);
@@ -254,14 +349,11 @@ int processCommand(int clientFd, packet_t *packet, char *buf) {
         fprintf(stderr, "Failed to send command\n");
         return -1;
     }
-
     // 处理 PUTS 命令
     if (packet->cmdType == CMD_TYPE_PUTS) {
         char srcPath[256] = {0};
         char destPath[256] = {0};
-
         parsePutsArgs(processedArgs, originalInput, srcPath, destPath);
-
         if (srcPath[0] == '\0') {
             fprintf(stderr, "Invalid puts command format\n");
             return -1;
@@ -295,9 +387,35 @@ int processCommand(int clientFd, packet_t *packet, char *buf) {
         }
 
         log_debug("Upload complete");
-        return 0;
-    }
+    } else if (packet->cmdType == CMD_TYPE_GETS) {
+        char fileFullPath[256];
+        parseGetsArgs(processedArgs, fileFullPath);
+        if (getsFile(clientFd, fileFullPath) < 0) {
+            return -1;
+        }
+        char responseBuf[RESPONSE_LENGTH] = {0};
+        ResponseStatus statusCode;
+        DataType dataType;
 
+        log_debug("Waiting for download confirmation...");
+        int ret = recvResponse(clientFd, responseBuf, sizeof(responseBuf), &statusCode, &dataType);
+        if (ret < 0) {
+            log_error("Failed to receive download confirmation");
+            return -1;
+        }
+
+        if (ret == 0) {
+            log_error("Server closed connection");
+            return -1;
+        }
+
+        // 打印服务器响应
+        if (dataType == DATA_TYPE_TEXT) {
+            printf("%s", responseBuf);
+        }
+
+        log_debug("download complete");
+    }
     return 0;
 }
 

@@ -54,7 +54,7 @@ int main(int argc, char **argv) {
             if (ret < 0) {
                 break;
             }
-            if (packet.cmdType == CMD_TYPE_PUTS) {
+            if (packet.cmdType == CMD_TYPE_PUTS || packet.cmdType == CMD_TYPE_GETS) {
                 print_prompt();
                 continue;
             }
