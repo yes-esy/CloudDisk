@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-17 22:20:22
+ * @LastEditTime : 2025-12-19 20:30:34
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "command.h"
@@ -729,50 +729,87 @@ void getsCommand(task_t *task) {
     char fileRealPath[PATH_MAX_LENGTH] = {0};
     ResponseStatus statusCode = STATUS_SUCCESS;
     int responseLen = 0;
+
     if (virtualPathToReal(task->data, fileRealPath, sizeof(fileRealPath)) < 0) {
         log_error("Virtual path conversion failed: %s", task->data);
         statusCode = STATUS_FAIL;
         responseLen = snprintf(response, sizeof(response), "gets error: path conversion failed\n");
         goto send_response;
     }
-    // 1.文件存在且为普通文件
+
+    // 检查文件存在且为普通文件
     struct stat st;
-    if (stat(fileRealPath, &st) != 0) { // 文件不存在
+    if (stat(fileRealPath, &st) != 0) {
+        statusCode = STATUS_FAIL;
         responseLen = snprintf(response, sizeof(response), "file get error(unexist).");
         goto send_response;
-    } else if (!S_ISREG(st.st_mode)) { // 非普通文件
+    } else if (!S_ISREG(st.st_mode)) {
+        statusCode = STATUS_FAIL;
         responseLen =
             snprintf(response, sizeof(response), "file get error(maby it is a directory).");
         goto send_response;
     }
-    //1.发送文件大小
-    uint32_t fileSize = htonl((uint32_t)st.st_size);
-    if (sendn(task->peerFd, &fileSize, sizeof(fileSize)) != sizeof(fileSize)) {
+
+    // 保存原始文件大小（主机字节序）
+    uint32_t originalFileSize = (uint32_t)st.st_size;
+
+    // 发送文件大小（网络字节序）
+    uint32_t fileSizeNet = htonl(originalFileSize);
+    if (sendn(task->peerFd, &fileSizeNet, sizeof(fileSizeNet)) != sizeof(fileSizeNet)) {
         log_error("Failed to send file size");
+        statusCode = STATUS_FAIL;
         responseLen = snprintf(response, sizeof(response), "file size send error(unknown error).");
         goto send_response;
     }
+
     // 打开文件
     int fileFd = open(fileRealPath, O_RDONLY);
+    if (fileFd < 0) {
+        log_error("Failed to open file: %s", fileRealPath);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "file open error.");
+        goto send_response;
+    }
+
     char buff[SEND_FILE_BUFF_SIZE];
     uint32_t totalSend = 0;
-    while (totalSend < fileSize) {
+
+    // ✅ 使用原始文件大小进行循环比较
+    while (totalSend < originalFileSize) {
         ssize_t bytesRead = read(fileFd, buff, sizeof(buff));
         if (bytesRead <= 0) {
             if (bytesRead < 0) {
-                log_error("read file error,bytesRead=%d.", bytesRead);
+                log_error("read file error, bytesRead=%zd", bytesRead);
             }
-            break;
+            close(fileFd);
+            statusCode = STATUS_FAIL;
+            responseLen = snprintf(response, sizeof(response), "file read error.");
+            goto send_response;
         }
+
         ssize_t bytesSend = sendn(task->peerFd, buff, bytesRead);
         if (bytesSend != bytesRead) {
-            log_error("send file data error, bytesSend!=bytesRead ");
-            break;
+            log_error("send file data error, bytesSend!=bytesRead");
+            close(fileFd);
+            statusCode = STATUS_FAIL;
+            responseLen = snprintf(response, sizeof(response), "file send error.");
+            goto send_response;
         }
         totalSend += bytesSend;
     }
     close(fileFd);
-    snprintf(response, sizeof(response), "file send success(%dbytes)", totalSend);
+
+    // 验证传输完整性
+    if (totalSend != originalFileSize) {
+        log_error("File transfer incomplete: %u/%u bytes", totalSend, originalFileSize);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "file transfer incomplete.");
+        goto send_response;
+    }
+
+    // 成功发送文件
+    responseLen = snprintf(response, sizeof(response), "file download successfully(%u bytes).\n", totalSend);
+
 send_response:
     if (sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, responseLen) < 0) {
         log_error("gets: Failed to send response to client (fd=%d)", task->peerFd);

@@ -2,3 +2,5 @@
 /workforlder/
 /log/
 *.log
+/test/
+*.img

@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-18 22:47:05
+ * @LastEditTime : 2025-12-19 20:51:25
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "client.h"
@@ -17,7 +17,74 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include "log.h"
+/**
+ * @brief 格式化文件大小显示（优化版，固定格式）
+ * @param bytes 字节数
+ * @param buffer 输出缓冲区
+ * @param size 缓冲区大小
+ */
+void formatFileSize(uint32_t bytes, char *buffer, size_t size) {
+    if (bytes >= 1024 * 1024 * 1024) {
+        // GB级别
+        double gb = (double)bytes / (1024 * 1024 * 1024);
+        snprintf(buffer, size, "%.1f GB", gb);
+    } else if (bytes >= 1024 * 1024) {
+        // MB级别
+        double mb = (double)bytes / (1024 * 1024);
+        snprintf(buffer, size, "%.1f MB", mb);
+    } else if (bytes >= 1024) {
+        // KB级别
+        double kb = (double)bytes / 1024;
+        snprintf(buffer, size, "%.1f KB", kb);
+    } else {
+        // Bytes级别
+        snprintf(buffer, size, "%u B", bytes);
+    }
+}
+/**
+ * @brief 显示美化的进度条（固定长度，无闪烁）
+ * @param current 当前进度
+ * @param total 总量
+ * @param prefix 前缀文本
+ */
+void showProgressBar(uint32_t current, uint32_t total, const char *prefix) {
+    const int barWidth = 50; // 固定进度条宽度
+    double progress = (double)current / total;
+    int pos = (int)(barWidth * progress);
 
+    // 清除当前行
+    printf("\r\033[K");
+
+    // 前缀（固定宽度）
+    printf("%-12s ", prefix ? prefix : "Progress");
+
+    // 进度条边框
+    printf("[");
+
+    // 进度条内容（固定50字符宽度）
+    for (int i = 0; i < barWidth; ++i) {
+        if (i < pos) {
+            printf("\033[42m \033[0m"); // 绿色背景
+        } else {
+            printf(" "); // 空格
+        }
+    }
+
+    printf("] ");
+
+    // 百分比（固定6字符宽度：xxx.x%）
+    printf("%5.1f%%", progress * 100.0);
+
+    // 文件大小信息（格式化为固定宽度）
+    char currentStr[16], totalStr[16];
+    formatFileSize(current, currentStr, sizeof(currentStr));
+    formatFileSize(total, totalStr, sizeof(totalStr));
+
+    // 固定宽度的大小显示（每个大小字段预留8字符）
+    printf(" (%8s/%8s)", currentStr, totalStr);
+
+    fflush(stdout);
+}
 /**
  * @brief 从处理后的参数中提取源文件路径和目标路径
  * @param processedArgs 格式: "filename destpath"
@@ -100,6 +167,7 @@ int putsFile(int socketFd, const char *filepath) {
 
     // 发送文件大小
     uint32_t fileSize = htonl((uint32_t)st.st_size);
+    uint32_t originalFileSize = (uint32_t)st.st_size;
     if (sendn(socketFd, &fileSize, sizeof(fileSize)) != sizeof(fileSize)) {
         log_error("Failed to send file size");
         close(fd);
@@ -124,9 +192,7 @@ int putsFile(int socketFd, const char *filepath) {
         }
 
         totalSent += bytesRead;
-        printf("\rUploading: %.1f%% (%ld/%ld bytes)", (double)totalSent / st.st_size * 100,
-               totalSent, st.st_size);
-        fflush(stdout);
+        showProgressBar((uint32_t)totalSent, originalFileSize, "Uploading");
     }
 
     printf("\n");
@@ -150,13 +216,32 @@ int getsFile(int socketFd, const char *fileFullPath) {
     uint32_t fileSizeNet = 0;
     if (recvn(socketFd, (void *)&fileSizeNet, sizeof(fileSizeNet)) != sizeof(fileSizeNet)) {
         log_error("recv file size error");
+        return -1;
     }
+
     uint32_t fileSize = (uint32_t)ntohl(fileSizeNet);
-    log_info("receiveed file size is %d", fileSize);
-    // 8. 接收文件内容
+    log_info("received file size is %u", fileSize);
+
+    // 添加文件大小验证
+    if (fileSize == 0 || fileSize > MAX_FILE_SIZE) {
+        log_error("Invalid file size: %u", fileSize);
+        return -1;
+    }
+
+    // 创建文件
+    int fd = open(fileFullPath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        log_error("Failed to create file: %s", fileFullPath);
+        perror("open");
+        return -1;
+    }
+
+    // 接收文件内容
     uint32_t totalReceived = 0;
     char buff[RECEIVE_FILE_BUFF_SIZE];
-    int fd = open(fileFullPath, O_RDWR | O_CREAT, 0644);
+
+    printf("Downloading: %s\n", fileFullPath);
+
     while (totalReceived < fileSize) {
         uint32_t remaining = fileSize - totalReceived;
         size_t toReceive =
@@ -164,34 +249,42 @@ int getsFile(int socketFd, const char *fileFullPath) {
 
         int ret = recvn(socketFd, buff, toReceive);
         if (ret <= 0) {
-            log_error("Failed to receive file data: ret=%d, received=%ld/%ld", ret, totalReceived,
+            log_error("Failed to receive file data: ret=%d, received=%u/%u", ret, totalReceived,
                       fileSize);
             goto cleanup_file;
         }
+
         // 写入文件
         ssize_t written = write(fd, buff, ret);
         if (written != ret) {
             log_error("Failed to write file data: written=%zd, expected=%d", written, ret);
             goto cleanup_file;
         }
+
         totalReceived += ret;
-        log_debug("Received %ld/%ld bytes", totalReceived, fileSize);
+
+        // 显示进度条
+        showProgressBar(totalReceived, fileSize, "Downloading");
+
+        log_debug("Received %u/%u bytes", totalReceived, fileSize);
     }
 
-    // 9. 验证文件大小
+    printf("\n"); // 进度条完成后换行
+
+    // 验证文件大小
     if (totalReceived != fileSize) {
-        log_error("File size mismatch: expected=%ld, received=%ld", fileSize, totalReceived);
+        log_error("File size mismatch: expected=%u, received=%u", fileSize, totalReceived);
         goto cleanup_file;
     }
 
-    // 10. 成功完成
+    // 成功完成
     close(fd);
-    fd = -1;
+    log_info("File downloaded successfully: %s (%u bytes)", fileFullPath, fileSize);
     return 0;
+
 cleanup_file:
     if (fd >= 0) {
         close(fd);
-        fd = -1;
         // 删除不完整的文件
         if (unlink(fileFullPath) < 0) {
             log_warn("Failed to remove incomplete file: %s", fileFullPath);
