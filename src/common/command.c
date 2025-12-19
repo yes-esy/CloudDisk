@@ -208,7 +208,6 @@ send_response:
         log_info("ls command completed: status=%d, items=%d, bytes=%zu", statusCode, count, offset);
     }
 }
-
 void cdCommand(task_t *task) {
     log_info("Executing cd command (fd=%d)", task->peerFd);
     char currentRealPath[PATH_MAX_LENGTH];
@@ -407,7 +406,6 @@ send_response:
         log_info("mkdir command completed: status=%d, dir=%s", statusCode, task->data);
     }
 }
-
 /**
  * @brief 删除目录命令
  * @param task 任务结构
@@ -545,7 +543,6 @@ send_response:
  * @param         {task_t} *task: 任务结构
  * @return        {*}
 **/
-
 void notCommand(task_t *task) {
     log_warn("Unknown command received (fd=%d)", task->peerFd);
 
@@ -569,8 +566,8 @@ void putsCommand(task_t *task) {
     log_info("Executing puts command (fd=%d)", task->peerFd);
     ResponseStatus statusCode = STATUS_SUCCESS;
     char fileDestVirtualPath[PATH_MAX_LENGTH] = {0}; // 文件目标虚拟路径
-    char fileDestrealPath[PATH_MAX_LENGTH] = {0}; // 文件目标真实路径
-    char fileName[FILENAME_LENGTH] = {0}; // 文件名称
+    char fileDestrealPath[PATH_MAX_LENGTH] = {0};    // 文件目标真实路径
+    char fileName[FILENAME_LENGTH] = {0};            // 文件名称
     char fileFullPath[PATH_MAX_LENGTH] = {0};
     char response[RESPONSE_LENGTH] = {0};
     size_t responseLen = 0;
@@ -726,6 +723,62 @@ send_response:
     addEpollReadFd(task->epFd, task->peerFd);
 }
 void getsCommand(task_t *task) {
+    log_info("Executing gets command (fd=%d)", task->peerFd);
+    log_info("gets file path: %s", task->data);
+    char response[RESPONSE_LENGTH] = {0};
+    char fileRealPath[PATH_MAX_LENGTH] = {0};
+    ResponseStatus statusCode = STATUS_SUCCESS;
+    int responseLen = 0;
+    if (virtualPathToReal(task->data, fileRealPath, sizeof(fileRealPath)) < 0) {
+        log_error("Virtual path conversion failed: %s", task->data);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "gets error: path conversion failed\n");
+        goto send_response;
+    }
+    // 1.文件存在且为普通文件
+    struct stat st;
+    if (stat(fileRealPath, &st) != 0) { // 文件不存在
+        responseLen = snprintf(response, sizeof(response), "file get error(unexist).");
+        goto send_response;
+    } else if (!S_ISREG(st.st_mode)) { // 非普通文件
+        responseLen =
+            snprintf(response, sizeof(response), "file get error(maby it is a directory).");
+        goto send_response;
+    }
+    //1.发送文件大小
+    uint32_t fileSize = htonl((uint32_t)st.st_size);
+    if (sendn(task->peerFd, &fileSize, sizeof(fileSize)) != sizeof(fileSize)) {
+        log_error("Failed to send file size");
+        responseLen = snprintf(response, sizeof(response), "file size send error(unknown error).");
+        goto send_response;
+    }
+    // 打开文件
+    int fileFd = open(fileRealPath, O_RDONLY);
+    char buff[SEND_FILE_BUFF_SIZE];
+    uint32_t totalSend = 0;
+    while (totalSend < fileSize) {
+        ssize_t bytesRead = read(fileFd, buff, sizeof(buff));
+        if (bytesRead <= 0) {
+            if (bytesRead < 0) {
+                log_error("read file error,bytesRead=%d.", bytesRead);
+            }
+            break;
+        }
+        ssize_t bytesSend = sendn(task->peerFd, buff, bytesRead);
+        if (bytesSend != bytesRead) {
+            log_error("send file data error, bytesSend!=bytesRead ");
+            break;
+        }
+        totalSend += bytesSend;
+    }
+    close(fileFd);
+    snprintf(response, sizeof(response), "file send success(%dbytes)", totalSend);
+send_response:
+    if (sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, responseLen) < 0) {
+        log_error("gets: Failed to send response to client (fd=%d)", task->peerFd);
+    } else {
+        log_info("gets command completed: status=%d, file path=%s", statusCode, task->data);
+    }
 }
 void userLoginCheck1(task_t *task) {
 }

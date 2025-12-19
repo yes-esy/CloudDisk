@@ -122,7 +122,41 @@ int processPutsCommand(const char *src, char *dest) {
     dest[destIndex] = '\0';
     return 0;
 }
+/**
+ * @brief 处理puts命令参数: "src/path/filename destpath" -> "filepath/filename"
+ * @param src 原始参数字符串
+ * @param dest 输出缓冲区
+ * @return 成功返回0,失败返回-1
+ */
+int processGetsCommand(const char *src, char *dest) {
+    if (!src || !dest) {
+        return -1;
+    }
 
+    int len = strlen(src);
+    if (len == 0) {
+        dest[0] = '\0';
+        return -1;
+    }
+
+    // 去除尾部空白字符
+    int end = len - 1;
+    while (end >= 0 && isspace((unsigned char)src[end])) {
+        end--;
+    }
+
+    // 复制有效部分
+    int destIndex = 0;
+    for (int i = 0; i <= end; i++) {
+        if (isspace((unsigned char)src[i])) {
+            // 中间遇到空白字符,停止复制
+            break;
+        }
+        dest[destIndex++] = src[i];
+    }
+    dest[destIndex] = '\0';
+    return 0;
+}
 /**
  * @brief 解析命令
  * @param pinput 输入的内容
@@ -182,33 +216,39 @@ int parseCommand(const char *pinput, int len, packet_t *pt, char *processedArgs)
             processedArgs[argLen] = '\0';
         }
 
+        char extractedArgs[ARGS_LENGTH] = {0};
+        int extractArgsLen = 0;
         // 处理不同命令类型
         if (pt->cmdType == CMD_TYPE_PUTS) {
-            char putsArgs[ARGS_LENGTH] = {0};
-            if (processPutsCommand(pinput + i, putsArgs) == 0) {
-                int putsLen = strlen(putsArgs);
-                if (putsLen >= PACKET_BUFF_SIZE) {
-                    putsLen = PACKET_BUFF_SIZE - 1;
-                }
-                memcpy(pt->buff, putsArgs, putsLen);
-                pt->buff[putsLen] = '\0';
-                pt->len = putsLen;
-            } else {
+            // puts命令处理
+            // pt->buff 存放 "filename destpath"
+            if (processPutsCommand(pinput + i, extractedArgs) != 0) {
                 // 处理失败,返回空
-                pt->buff[0] = '\0';
-                pt->len = 0;
-                return -1;
+                goto process_fail;
             }
+        } else if (CMD_TYPE_GETS == pt->cmdType) {
+            // gets命令处理
+            // pt->buff 存放 "path/filename"
+            if (processGetsCommand(pinput + i, extractedArgs) != 0) {
+                // 处理失败,返回空
+                goto process_fail;
+            }
+        }
+        if (strlen(extractedArgs) > 0) {
+            extractArgsLen = strlen(extractedArgs);
+            memcpy(pt->buff, extractedArgs, extractArgsLen);
+            pt->buff[extractArgsLen] = '\0';
+            pt->len = extractArgsLen;
         } else {
             // 其他命令直接复制参数
             memcpy(pt->buff, pinput + i, argLen);
             pt->buff[argLen] = '\0';
             pt->len = argLen;
         }
-    } else {
-        pt->buff[0] = '\0';
-        pt->len = 0;
     }
-
     return 0;
+process_fail:
+    pt->buff[0] = '\0';
+    pt->len = 0;
+    return -1;
 }

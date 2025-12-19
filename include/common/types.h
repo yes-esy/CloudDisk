@@ -26,6 +26,7 @@
 #define SEND_FILE_BUFF_SIZE 1024
 #define MAX_FILE_SIZE (1024UL * 1024UL * 1024UL) /* 1 GiB */
 #define ARGS_LENGTH 256
+#define FILE_BUFF_SIZE 1024
 /* 命令类型枚举 */
 typedef enum {
     CMD_TYPE_PWD = 1,
