@@ -40,6 +40,7 @@ typedef enum {
     CMD_TYPE_PUTS,
     CMD_TYPE_GETS,
     CMD_TYPE_NOTCMD,
+    CMD_TYPE_CHECK_PARTIAL,
     TASK_LOGIN_VERIFY_USERNAME = 100,
     TASK_LOGIN_VERIFY_PASSWORD,
 } CmdType;
@@ -106,5 +107,20 @@ typedef struct {
     char pwd[128];       //用户当前路径
     time_t login_time;
 } user_info_t;
+
+// 新增传输模式枚举
+typedef enum {
+    TRANSFER_MODE_NORMAL = 0, // 正常传输
+    TRANSFER_MODE_RESUME = 1  // 断点续传
+} TransferMode;
+
+// 扩展的文件传输头
+typedef struct {
+    uint32_t fileSize;  // 文件总大小
+    uint32_t offset;    // 传输起始偏移量
+    TransferMode mode;  // 传输模式
+    char filename[256]; // 文件名
+    char checksum[33];  // MD5校验和（可选）
+} file_transfer_header_t;
 
 #endif /* CLOUDDISK_TYPES_H */
