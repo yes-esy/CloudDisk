@@ -13,7 +13,22 @@
 #include <stdio.h>
 #include "types.h"
 #define PROMPT "CloudDisk> "
+#define COLOR_RESET "\033[0m"
+#define COLOR_BOLD "\033[1m"
+#define COLOR_GREEN "\033[32m"
+#define COLOR_BLUE "\033[34m"
+#define COLOR_CYAN "\033[36m"
+#define COLOR_YELLOW "\033[33m"
+extern char username[USERNAME_LENGTH];
+extern char workforlder[PATH_MAX_LENGTH];
 
+
+/**
+ * @brief : 用户登录 
+ * @param sockfd:
+ * @return void
+**/
+void userLogin(int sockfd);
 /**
  * @brief 发送请求给服务器
  * @param clientFd 客户端socket
@@ -32,18 +47,37 @@ int sendRequest(int clientFd, const packet_t *packet);
  */
 int recvResponse(int clientFd, char *buf, int bufLen, ResponseStatus *statusCode,
                  DataType *dataType);
-static void print_prompt() {
-    printf("%s", PROMPT);
-    fflush(stdout); // 立即刷新输出缓冲区
+/**
+ * @brief 打印命令提示符 - Bash风格
+ * 格式: [username@CloudDisk pwd]$ 
+ * 示例: [yes@CloudDisk /data]$ 
+ */
+static inline void print_prompt() {
+    if (username[0] && workforlder[0]) {
+        // 登录后: [用户名@CloudDisk 当前目录]$
+        printf("%s[%s%s@CloudDisk%s %s%s%s]$%s ", COLOR_BOLD, COLOR_GREEN, username,
+               COLOR_RESET COLOR_BOLD, COLOR_BLUE, workforlder, COLOR_RESET COLOR_BOLD,
+               COLOR_RESET);
+    } else {
+        // 登录前: CloudDisk>
+        printf("%sCloudDisk>%s ", COLOR_CYAN, COLOR_RESET);
+    }
+    fflush(stdout);
 }
 
-static void print_welcome() {
-    printf("========================================\n");
-    printf("   Welcome to CloudDisk Client v0.0.1  \n");
-    printf("   Type 'help' for available commands  \n");
-    printf("========================================\n");
+/**
+ * @brief 打印欢迎信息
+ */
+static inline void print_welcome() {
+    printf("%s", COLOR_CYAN);
+    printf("╔════════════════════════════════════════╗\n");
+    printf("║   Welcome to CloudDisk Client v0.2.0   ║\n");
+    printf("║   Type 'help' for available commands   ║\n");
+    printf("╚════════════════════════════════════════╝\n");
+    printf("%s", COLOR_RESET);
     print_prompt();
 }
+
 /**
  * @brief 处理标准输入
  * @param buf 输入缓冲区

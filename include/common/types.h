@@ -27,6 +27,9 @@
 #define MAX_FILE_SIZE (1024UL * 1024UL * 1024UL) /* 1 GiB */
 #define ARGS_LENGTH 256
 #define FILE_BUFF_SIZE 1024
+#define USERNAME_LENGTH 32
+#define USERNAME "please input a valid user name:\n"
+#define PASSWORD "please input the right password:\n"
 /* 命令类型枚举 */
 typedef enum {
     CMD_TYPE_PWD = 1,
@@ -37,13 +40,8 @@ typedef enum {
     CMD_TYPE_PUTS,
     CMD_TYPE_GETS,
     CMD_TYPE_NOTCMD,
-
-    TASK_LOGIN_SECTION1 = 100,
-    TASK_LOGIN_SECTION1_RESP_OK,
-    TASK_LOGIN_SECTION1_RESP_ERROR,
-    TASK_LOGIN_SECTION2,
-    TASK_LOGIN_SECTION2_RESP_OK,
-    TASK_LOGIN_SECTION2_RESP_ERROR,
+    TASK_LOGIN_VERIFY_USERNAME = 100,
+    TASK_LOGIN_VERIFY_PASSWORD,
 } CmdType;
 
 /**
@@ -53,6 +51,7 @@ typedef enum {
     DATA_TYPE_TEXT = 0,
     DATA_TYPE_BINARY = 1,
     DATA_TYPE_UNKOWN = 2,
+    DATA_TYPE_CIPHERTEXT = 3,
 } DataType;
 
 /**
@@ -96,5 +95,16 @@ typedef struct task_t {
     CmdType type;                   /* 命令类型 */
     char currPath[PATH_MAX_LENGTH]; /*虚拟初始路径 */
 } task_t;
+
+typedef enum { STATUS_LOGOFF = 0, STATUS_LOGIN } LoginStatus;
+
+typedef struct {
+    int sockfd;          //套接字文件描述符
+    LoginStatus status;  //登录状态
+    char name[20];       //用户名(客户端传递过来的)
+    char encrypted[100]; //从/etc/shadow文件中获取的加密密文
+    char pwd[128];       //用户当前路径
+    time_t login_time;
+} user_info_t;
 
 #endif /* CLOUDDISK_TYPES_H */

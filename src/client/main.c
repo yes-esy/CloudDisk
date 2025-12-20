@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-18 22:47:38
+ * @LastEditTime : 2025-12-20 16:55:11
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
  **/
 #include "net.h"
@@ -14,6 +14,8 @@
 #include <unistd.h>
 #include "log.h"
 #include "config.h"
+char username[USERNAME_LENGTH];
+char workforlder[PATH_MAX_LENGTH];
 int main(int argc, char **argv) {
     ARGS_CHECK(argc, 2);
 
@@ -30,6 +32,7 @@ int main(int argc, char **argv) {
     log_info("log init finish");
     int port = atoi(args.port);
     int clientFd = tcpConnect(args.ip, port);
+    userLogin(clientFd);
     char buf[1024] = {0};
     fd_set rdset;
     packet_t packet;

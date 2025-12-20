@@ -4,23 +4,23 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-17 23:25:14
+ * @LastEditTime : 2025-12-20 16:39:05
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
  **/
- #include "net.h"
+#include "net.h"
 #include "handler.h"
 #include "threadpool.h"
 #include "config.h"
 #include "hashtable.h"
 #include "log.h"
-
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
-
+#include "list.h"
+ListNode *userList = NULL;
 
 int main(int argc, char **argv) {
     ARGS_CHECK(argc, 2);
@@ -33,7 +33,7 @@ int main(int argc, char **argv) {
     }
 
     // 日志
-    log_init(args.logFile,LOG_DEBUG);
+    log_init(args.logFile, LOG_DEBUG);
     log_info("log init finish");
 
     // 创建/启动线程池
@@ -71,8 +71,13 @@ int main(int argc, char **argv) {
             if (fd == listenFd) { // 监听
                 int peerFd = accept(listenFd, NULL, NULL);
                 if (peerFd >= 0) {
-                    printf("conn %d has connected.\n", peerFd);
+                    log_info("conn %d has connected.\n", peerFd);
                     addEpollReadFd(epollFd, peerFd);
+                    user_info_t *userNode = (user_info_t *)calloc(1, sizeof(user_info_t));
+                    if (userNode) {
+                        userNode->sockfd = peerFd; // ✅ 设置 socket fd
+                        appendNode(&userList, userNode);
+                    }
                 }
             } else {
                 handleMessage(fd, epollFd, &threadPool.que);

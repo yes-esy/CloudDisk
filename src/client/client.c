@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-19 20:51:25
+ * @LastEditTime : 2025-12-20 16:56:23
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "client.h"
@@ -17,6 +17,133 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include "log.h"
+extern char workforlder[PATH_MAX_LENGTH];
+/**
+ * @brief 发送用户名并接收验证结果
+ * @param sockfd socket描述符
+ * @param packet_p 输出参数:服务器响应包
+ * @return 成功返回0
+ */
+int sendUsername(int sockfd, packet_t *packet_p) {
+    packet_t packet;
+    // 接收服务器响应
+    char responseBuf[RESPONSE_LENGTH] = {0};
+    ResponseStatus statusCode;
+    DataType dataType;
+    while (1) {
+        printf(USERNAME);
+        char usernameInput[USERNAME_LENGTH] = {0};
+        int ret = read(STDIN_FILENO, usernameInput, sizeof(usernameInput));
+        if (ret <= 0) {
+            printf("read error,try again,");
+            continue;
+        }
+        usernameInput[ret - 1] = '\0'; // 去掉换行符
+        memset(&packet, 0, sizeof(packet_t));
+        packet.len = strlen(usernameInput);
+        packet.cmdType = TASK_LOGIN_VERIFY_USERNAME;
+        strcpy(packet.buff, usernameInput);
+        ret = sendRequest(sockfd, &packet);
+        if (ret <= 0) {
+            printf("unknown error,try again\n");
+            log_error("Failed to send username");
+            continue;
+        }
+
+        log_info("send username: %s", usernameInput);
+        log_debug("Waiting for username verification...");
+        ret = recvResponse(sockfd, responseBuf, sizeof(responseBuf), &statusCode, &dataType);
+        if (ret < 0) {
+            log_error("Failed to receive response");
+            continue;
+        }
+        if (ret == 0) {
+            log_error("Server closed connection");
+            return -1;
+        }
+
+        if (statusCode == STATUS_FAIL) {
+            printf("%s", responseBuf);
+            continue;
+        }
+        strncpy(username, usernameInput, sizeof(username) - 1);
+        username[sizeof(username) - 1] = '\0';
+
+        memcpy(packet.buff, responseBuf, ret);
+        packet.len = ret;
+
+        break;
+    }
+    memcpy(packet_p, &packet, sizeof(packet_t));
+    return 0;
+}
+int sendPassword(int sockfd, packet_t *packet_p) {
+    packet_t packet;
+    int ret;
+    // 接收服务器响应
+    char responseBuf[RESPONSE_LENGTH] = {0};
+    ResponseStatus statusCode;
+    DataType dataType;
+    while (1) {
+        char *password = getpass(PASSWORD);
+        char *encrytped = crypt(password, packet_p->buff);
+        packet.len = strlen(encrytped);
+        packet.cmdType = TASK_LOGIN_VERIFY_PASSWORD;
+        strncpy(packet.buff, encrytped, packet.len);
+        ret = sendRequest(sockfd, &packet);
+        if (ret <= 0) {
+            printf("unknown error,try again\n");
+            log_error("Failed to send username");
+            continue;
+        }
+        log_info("send password ciphertext : %s", encrytped);
+        log_debug("Waiting for password verification...");
+        ret = recvResponse(sockfd, responseBuf, sizeof(responseBuf), &statusCode, &dataType);
+        if (ret < 0) {
+            log_error("Failed to receive response");
+            continue;
+        }
+        if (ret == 0) {
+            log_error("Server closed connection");
+            return -1;
+        }
+
+        if (statusCode == STATUS_FAIL) {
+            printf("%s", responseBuf);
+            continue;
+        }
+        printf("%s", responseBuf); // "Login successful! Welcome, yes\n"
+
+        // ✅ 第二次接收: 当前工作目录
+        memset(workforlder, 0, sizeof(workforlder)); // 清空缓冲区
+        ret = recvResponse(sockfd, workforlder, sizeof(workforlder), &statusCode, &dataType);
+
+        if (ret < 0) {
+            log_error("Failed to receive current directory");
+            return -1;
+        }
+
+        if (ret == 0) {
+            log_error("Server closed connection while receiving directory");
+            return -1;
+        }
+        log_info("Login successful, current directory: %s", workforlder);
+        break;
+    }
+    return 0;
+}
+
+/**
+ * @brief : 用户登录 
+ * @param sockfd:
+ * @return void
+**/
+void userLogin(int sockfd) {
+    int ret;
+    packet_t packet;
+    sendUsername(sockfd, &packet);
+    sendPassword(sockfd, &packet);
+}
 /**
  * @brief 格式化文件大小显示（优化版，固定格式）
  * @param bytes 字节数
@@ -302,17 +429,16 @@ int sendRequest(int clientFd, const packet_t *packet) {
     if (!packet) {
         return -1;
     }
-
-    // 计算发送大小: len(4) + cmdType(4) + data(len)
-    size_t totalSize = sizeof(packet->len) + sizeof(packet->cmdType) + packet->len;
-
-    // 发送整个包
-    int ret = sendn(clientFd, packet, totalSize);
+    packet_t netPacket;
+    netPacket.len = htonl(packet->len);
+    netPacket.cmdType = htonl(packet->cmdType);
+    memcpy(netPacket.buff, packet->buff, packet->len);
+    size_t totalSize = sizeof(netPacket.len) + sizeof(netPacket.cmdType) + packet->len;
+    int ret = sendn(clientFd, &netPacket, totalSize);
     if (ret != (int)totalSize) {
-        perror("sendRequest: sendn failed");
+        perror("sendRequest failed");
         return -1;
     }
-
     return ret;
 }
 /**

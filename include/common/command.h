@@ -58,18 +58,6 @@ void getsCommand(task_t *task);
 void notCommand(task_t *task);
 
 /**
- * @brief 用户登录检查阶段1
- * @param task 任务结构
- */
-void userLoginCheck1(task_t *task);
-
-/**
- * @brief 用户登录检查阶段2
- * @param task 任务结构
- */
-void userLoginCheck2(task_t *task);
-
-/**
  * @brief 执行命令(命令分发器)
  * @param task 任务结构
  */

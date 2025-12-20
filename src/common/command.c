@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-19 20:30:34
+ * @LastEditTime : 2025-12-20 16:37:17
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "command.h"
@@ -20,7 +20,9 @@
 #include <limits.h>
 #include <fcntl.h>
 #include <stdlib.h>
-
+#include "list.h"
+#include "login.h"
+extern ListNode *userList;
 static char currentVirtualPath[PATH_MAX_LENGTH] = "/";
 /**
  * @brief 发送响应给客户端
@@ -808,7 +810,8 @@ void getsCommand(task_t *task) {
     }
 
     // 成功发送文件
-    responseLen = snprintf(response, sizeof(response), "file download successfully(%u bytes).\n", totalSend);
+    responseLen =
+        snprintf(response, sizeof(response), "file download successfully(%u bytes).\n", totalSend);
 
 send_response:
     if (sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, responseLen) < 0) {
@@ -817,9 +820,89 @@ send_response:
         log_info("gets command completed: status=%d, file path=%s", statusCode, task->data);
     }
 }
-void userLoginCheck1(task_t *task) {
+void userLoginVerifyUsername(task_t *task) {
+    log_info("username login Verify username(%s).", task->data);
+    ListNode *pNode = userList;
+    char response[RESPONSE_LENGTH] = {0};
+    int found = 0;
+
+    while (pNode != NULL) {
+        user_info_t *user = (user_info_t *)pNode->val;
+        if (user->sockfd == task->peerFd) {
+            found = 1;
+            strcpy(user->name, task->data);
+            int ret = selectUsername(user, response);
+            if (0 == ret) {
+                log_info("Username '%s' found, sending salt", task->data);
+                sendResponse(user->sockfd, STATUS_SUCCESS, DATA_TYPE_CIPHERTEXT, response,
+                             strlen(response));
+            } else {
+                log_warn("Username '%s' not found in system", task->data);
+                int responseLen =
+                    snprintf(response, sizeof(response), "no such username was found.\n");
+                sendResponse(user->sockfd, STATUS_FAIL, DATA_TYPE_TEXT, response, responseLen);
+            }
+            return;
+        }
+        pNode = pNode->next;
+    }
+    if (!found) {
+        log_error("User node not found for sockfd=%d", task->peerFd);
+        int responseLen =
+            snprintf(response, sizeof(response), "Internal error: user session not found.\n");
+        sendResponse(task->peerFd, STATUS_FAIL, DATA_TYPE_TEXT, response, responseLen);
+    }
 }
-void userLoginCheck2(task_t *task) {
+void userLoginVerifyPassword(task_t *task) {
+    log_info("Password verification for cryptograph: %s", task->data);
+    ListNode *pNode = userList;
+    char response[RESPONSE_LENGTH] = {0};
+    int found = 0;
+    int responseLen = 0;
+
+    while (pNode != NULL) {
+        user_info_t *user = (user_info_t *)pNode->val;
+        if (user->sockfd == task->peerFd) {
+            found = 1;
+            if (strcmp(task->data, user->encrypted) == 0) {
+                user->status = STATUS_LOGIN;
+                strcpy(user->pwd, "/");
+                user->login_time = time(NULL);
+                log_info("User '%s' logged in successfully at %ld", user->name, user->login_time);
+                responseLen = snprintf(response, sizeof(response),
+                                       "Login successful! Welcome, %s\n", user->name);
+                if (sendResponse(user->sockfd, STATUS_SUCCESS, DATA_TYPE_TEXT, response,
+                                 responseLen)
+                    < 0) {
+                    log_error("Failed to send login success message");
+                    return;
+                }
+                responseLen = strlen(user->pwd);
+                if (sendResponse(user->sockfd, STATUS_SUCCESS, DATA_TYPE_TEXT, user->pwd,
+                                 responseLen)
+                    < 0) {
+                    log_error("Failed to send current working directory");
+                    return;
+                }
+                log_info("Login response sent: success message + pwd (%s)", user->pwd);
+            } else {
+                log_warn("Password verification failed for user '%s' (fd=%d)", user->name,
+                         user->sockfd);
+                responseLen =
+                    snprintf(response, sizeof(response), "Incorrect password. Please try again.\n");
+                sendResponse(user->sockfd, STATUS_FAIL, DATA_TYPE_TEXT, response, responseLen);
+            }
+            return;
+        }
+        pNode = pNode->next;
+    }
+    // 未找到用户节点
+    if (!found) {
+        log_error("User node not found for sockfd=%d", task->peerFd);
+        responseLen =
+            snprintf(response, sizeof(response), "Internal error: user session not found.\n");
+        sendResponse(task->peerFd, STATUS_FAIL, DATA_TYPE_TEXT, response, responseLen);
+    }
 }
 /**
  * @brief        : 执行命令
@@ -852,23 +935,11 @@ void executeCmd(task_t *task) {
         case CMD_TYPE_GETS:
             getsCommand(task);
             break;
-        case TASK_LOGIN_SECTION1:
-            userLoginCheck1(task);
+        case TASK_LOGIN_VERIFY_USERNAME:
+            userLoginVerifyUsername(task);
             break;
-        case TASK_LOGIN_SECTION1_RESP_OK:
-            userLoginCheck1(task);
-            break;
-        case TASK_LOGIN_SECTION1_RESP_ERROR:
-            userLoginCheck1(task);
-            break;
-        case TASK_LOGIN_SECTION2:
-            userLoginCheck2(task);
-            break;
-        case TASK_LOGIN_SECTION2_RESP_OK:
-            userLoginCheck2(task);
-            break;
-        case TASK_LOGIN_SECTION2_RESP_ERROR:
-            userLoginCheck2(task);
+        case TASK_LOGIN_VERIFY_PASSWORD:
+            userLoginVerifyPassword(task);
             break;
     }
 }

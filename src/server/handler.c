@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-14 23:08:27
+ * @LastEditTime : 2025-12-20 15:05:18
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "handler.h"
@@ -12,33 +12,31 @@
 #include <stdlib.h>
 #include <unistd.h>
 void handleMessage(int sockFd, int epFd, taskQueue_t *queue) {
-    log_info(" handleMessage: Processing message from sockFd %d", sockFd);
-
     // 消息格式: cmd content
     //1.1 获取消息长度
     int length = -1;
-    log_info(" handleMessage: Receiving message length...");
     int ret = recvn(sockFd, &length, sizeof(length));
+    length = ntohl(length);
     log_info(" handleMessage: recvn length returned %d, length value: %d", ret, length);
-
-    if (0 == ret) {
-        log_info(" handleMessage: Connection closed while receiving length");
+    if (ret != sizeof(length)) { // 必须接收完整的4字节
+        if (ret == 0) {
+            log_info("Connection closed while receiving length");
+        } else {
+            log_error("Failed to receive length: ret=%d", ret);
+        }
         goto end;
     }
 
     //1.2 获取消息类型
     int cmdType = -1;
-    log_info(" handleMessage: Receiving command type...");
     ret = recvn(sockFd, &cmdType, sizeof(cmdType));
+    cmdType = ntohl(cmdType);
     log_info(" handleMessage: recvn cmdType returned %d, cmdType value: %d", ret, cmdType);
 
     if (ret == 0) {
         log_info(" handleMessage: Connection closed while receiving cmdType");
         goto end;
     }
-
-    log_info(" handleMessage: Creating task for sockFd %d, cmdType %d, length %d", sockFd,
-           cmdType, length);
 
     task_t *task = (task_t *)calloc(1, sizeof(task_t));
     task->peerFd = sockFd;

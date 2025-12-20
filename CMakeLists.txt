@@ -24,6 +24,7 @@ set(SERVER_SRC "src/server")
 set(COMMON_SRC "src/common")
 set(UTILS_SRC "src/utils")
 set(CONFIG_SRC "src/config")
+set(LOGIN_SRC "src/auth")
 
 # 客户端源文件
 set(CLIENT_SRCS
@@ -49,6 +50,7 @@ set(SERVER_SRCS
     "${UTILS_SRC}/path.c"
     "${UTILS_SRC}/log.c"
     "${CONFIG_SRC}/config.c"
+    "${LOGIN_SRC}/login.c"
 )
 
 # 生成服务器可执行文件
@@ -63,6 +65,7 @@ target_include_directories(CloudDiskServer PRIVATE
     ${PROJECT_SOURCE_DIR}/include/server
     ${PROJECT_SOURCE_DIR}/include/utils
     ${PROJECT_SOURCE_DIR}/include/config
+     ${PROJECT_SOURCE_DIR}/include/auth
 )
 
 # 客户端包含目录
@@ -71,13 +74,23 @@ target_include_directories(CloudDiskClient PRIVATE
     ${PROJECT_SOURCE_DIR}/include/client
     ${PROJECT_SOURCE_DIR}/include/utils
     ${PROJECT_SOURCE_DIR}/include/config
+    ${PROJECT_SOURCE_DIR}/include/auth
 )
 
 # 查找线程库
 find_package(Threads REQUIRED)
 
-# 服务器链接线程库
-target_link_libraries(CloudDiskServer PRIVATE Threads::Threads)
+
+# 服务器链接库
+target_link_libraries(CloudDiskServer PRIVATE 
+    Threads::Threads
+    crypt
+)
+
+# 客户端链接库
+target_link_libraries(CloudDiskClient PRIVATE
+    crypt
+)
 
 # 安装规则(可选)
 install(TARGETS CloudDiskServer CloudDiskClient
