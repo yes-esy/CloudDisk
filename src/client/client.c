@@ -4,19 +4,21 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-20 16:56:23
+ * @LastEditTime : 2025-12-20 23:39:17
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "client.h"
-#include <unistd.h>
 #include "net.h"
 #include "protocol.h"
+#include "log.h"
+#include <unistd.h>
+#include "tools.h"
 #include <ctype.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <fcntl.h>
 #include <sys/stat.h>
-#include "log.h"
 extern char workforlder[PATH_MAX_LENGTH];
 /**
  * @brief 发送用户名并接收验证结果
@@ -77,6 +79,12 @@ int sendUsername(int sockfd, packet_t *packet_p) {
     memcpy(packet_p, &packet, sizeof(packet_t));
     return 0;
 }
+/**
+ * @brief 发送密码并接收验证结果
+ * @param sockfd socket描述符
+ * @param packet_p 输出参数:服务器响应包
+ * @return 成功返回0
+ */
 int sendPassword(int sockfd, packet_t *packet_p) {
     packet_t packet;
     int ret;
@@ -135,7 +143,7 @@ int sendPassword(int sockfd, packet_t *packet_p) {
 
 /**
  * @brief : 用户登录 
- * @param sockfd:
+ * @param sockfd: 客户端socket
  * @return void
 **/
 void userLogin(int sockfd) {
@@ -270,21 +278,66 @@ void parseGetsArgs(char *processedArgs, char *fileFullPath) {
     strncpy(fileFullPath, processedArgs, len);
     fileFullPath[len] = '\0';
 }
+/**
+ * @brief 检查服务器是否有部分文件
+ * @param filename 文件名
+ * @param fileSize 文件大小
+ * @param checkSum 校验和
+ */
+uint32_t checkServerPartialFile(int socketFd, const char *filename, uint32_t fileSize,
+                                const char *checkSum) {
+    // 发送检查请求
+    packet_t checkPacket;
+    memset(&checkPacket, 0, sizeof(checkPacket));
+    checkPacket.cmdType = CMD_TYPE_CHECK_PARTIAL;
 
+    // 构造检查数据：filename|fileSize|checksum
+    snprintf(checkPacket.buff, sizeof(checkPacket.buff), "%s|%u|%s", filename, fileSize, checkSum);
+    checkPacket.len = strlen(checkPacket.buff);
+
+    if (sendRequest(socketFd, &checkPacket) < 0) {
+        log_error("Failed to send partial file check request");
+        return 0;
+    }
+
+    // 接收服务器响应
+    char responseBuf[RESPONSE_LENGTH];
+    ResponseStatus statusCode;
+    DataType dataType;
+
+    int ret = recvResponse(socketFd, responseBuf, sizeof(responseBuf), &statusCode, &dataType);
+    if (ret <= 0 || statusCode != STATUS_SUCCESS) {
+        return 0; // 没有部分文件，从头开始
+    }
+
+    // 解析返回的偏移量
+    return (uint32_t)atol(responseBuf);
+}
+int sendFileHeader(int sockfd, uint32_t fileSize, uint32_t offset, const char *fileName,
+                   const char *checkSum) {
+    file_transfer_header_t header;
+    memset(&header, 0, sizeof(header));
+    header.fileSize = htonl(fileSize);
+    header.offset = htonl(offset);
+    header.mode = (offset > 0) ? TRANSFER_MODE_RESUME : TRANSFER_MODE_NORMAL;
+    strncpy(header.filename, fileName, sizeof(header.filename) - 1);
+    strncpy(header.checksum, checkSum, sizeof(header.checksum) - 1);
+    return sendn(sockfd, &header, sizeof(header));
+}
 /**
  * @brief 发送文件(优化版)
  * @param socketFd socket描述符
  * @param filepath 文件路径
  * @return 成功返回0,失败返回-1
  */
-int putsFile(int socketFd, const char *filepath) {
+int putsFile(int socketFd, const char *filepath, uint32_t serverOffset) {
+
     int fd = open(filepath, O_RDONLY);
     if (fd < 0) {
         log_error("Failed to open file: %s", filepath);
         perror("open");
         return -1;
     }
-
     struct stat st;
     if (fstat(fd, &st) < 0) {
         perror("fstat");
@@ -292,19 +345,43 @@ int putsFile(int socketFd, const char *filepath) {
         return -1;
     }
 
-    // 发送文件大小
-    uint32_t fileSize = htonl((uint32_t)st.st_size);
-    uint32_t originalFileSize = (uint32_t)st.st_size;
-    if (sendn(socketFd, &fileSize, sizeof(fileSize)) != sizeof(fileSize)) {
-        log_error("Failed to send file size");
+    // 计算文件校验和
+    char md5_checksum[33];
+    if (calculateFileMD5(filepath, md5_checksum) < 0) {
+        log_error("Failed to calculate file checksum");
         close(fd);
         return -1;
     }
+    // 发送文件大小
+    uint32_t fileSize = (uint32_t)st.st_size;
+    uint32_t originalFileSize = (uint32_t)st.st_size;
+    // 提取文件名
+    const char *filename = strrchr(filepath, '/');
+    filename = filename ? filename + 1 : filepath;
+    // 检查服务器是否存在该文件
+    uint32_t ret = sendFileHeader(socketFd, fileSize, serverOffset, filename, md5_checksum);
+    if (ret != sizeof(file_transfer_header_t)) {
+        log_error("Failed to send transfer header");
+        close(fd);
+        return -1;
+    }
+    if (serverOffset > 0) {
+        if (lseek(fd, serverOffset, SEEK_SET) != (off_t)serverOffset) {
+            log_error("Failed to seek to offset %u", serverOffset);
+            close(fd);
+            return -1;
+        }
+        printf("Resuming upload from offset: %u bytes\n", serverOffset);
+    }
 
+    // if (sendn(socketFd, &fileSize, sizeof(fileSize)) != sizeof(fileSize)) {
+    //     log_error("Failed to send file size");
+    //     close(fd);
+    //     return -1;
+    // }
     // 发送文件内容
-    off_t totalSent = 0;
+    uint32_t totalSent = (off_t)serverOffset;
     char buff[SEND_FILE_BUFF_SIZE];
-
     while (totalSent < st.st_size) {
         ssize_t bytesRead = read(fd, buff, sizeof(buff));
         if (bytesRead <= 0) {
@@ -321,15 +398,12 @@ int putsFile(int socketFd, const char *filepath) {
         totalSent += bytesRead;
         showProgressBar((uint32_t)totalSent, originalFileSize, "Uploading");
     }
-
     printf("\n");
     close(fd);
-
     if (totalSent != st.st_size) {
         log_error("File transfer incomplete: %ld/%ld bytes", totalSent, st.st_size);
         return -1;
     }
-
     log_info("File uploaded successfully: %s (%ld bytes)", filepath, st.st_size);
     return 0;
 }
@@ -561,13 +635,7 @@ int processCommand(int clientFd, packet_t *packet, char *buf) {
     // 清空并解析命令
     memset(packet, 0, sizeof(packet_t));
     parseCommand(buf, strlen(buf), packet, processedArgs);
-
-    // 发送请求
-    int ret = sendRequest(clientFd, packet);
-    if (ret < 0) {
-        fprintf(stderr, "Failed to send command\n");
-        return -1;
-    }
+    int ret = 0;
     // 处理 PUTS 命令
     if (packet->cmdType == CMD_TYPE_PUTS) {
         char srcPath[256] = {0};
@@ -578,18 +646,45 @@ int processCommand(int clientFd, packet_t *packet, char *buf) {
             return -1;
         }
 
-        printf("Uploading: %s -> %s\n", srcPath, destPath);
-        // 上传文件
-        if (putsFile(clientFd, srcPath) < 0) {
+        // ✅ 1. 先检查服务器是否有部分文件（在发送 PUTS 命令之前）
+        struct stat st;
+        if (stat(srcPath, &st) < 0) {
+            perror("stat");
             return -1;
         }
+
+        char md5_checksum[33];
+        if (calculateFileMD5(srcPath, md5_checksum) < 0) {
+            log_error("Failed to calculate file checksum");
+            return -1;
+        }
+
+        const char *filename = strrchr(srcPath, '/');
+        filename = filename ? filename + 1 : srcPath;
+
+        // 检查服务器部分文件
+        uint32_t serverOffset =
+            checkServerPartialFile(clientFd, filename, (uint32_t)st.st_size, md5_checksum);
+        ret = sendRequest(clientFd, packet);
+        if (ret < 0) {
+            fprintf(stderr, "Failed to send command\n");
+            return -1;
+        }
+        printf("Uploading: %s -> %s\n", srcPath, destPath);
+        // 上传文件
+        if (putsFile(clientFd, srcPath,serverOffset) < 0) {
+            return -1;
+        }
+        // if (putsFileWithResume(clientFd, srcPath) < 0) {
+        //     return -1;
+        // }
 
         char responseBuf[RESPONSE_LENGTH] = {0};
         ResponseStatus statusCode;
         DataType dataType;
 
         log_debug("Waiting for upload confirmation...");
-        int ret = recvResponse(clientFd, responseBuf, sizeof(responseBuf), &statusCode, &dataType);
+        ret = recvResponse(clientFd, responseBuf, sizeof(responseBuf), &statusCode, &dataType);
         if (ret < 0) {
             log_error("Failed to receive upload confirmation");
             return -1;
@@ -606,7 +701,15 @@ int processCommand(int clientFd, packet_t *packet, char *buf) {
         }
 
         log_debug("Upload complete");
-    } else if (packet->cmdType == CMD_TYPE_GETS) {
+        return 0;
+    }
+    // 其他命令正常发送
+    ret = sendRequest(clientFd, packet);
+    if (ret < 0) {
+        fprintf(stderr, "Failed to send command\n");
+        return -1;
+    }
+    if (packet->cmdType == CMD_TYPE_GETS) {
         char fileFullPath[256];
         parseGetsArgs(processedArgs, fileFullPath);
         if (getsFile(clientFd, fileFullPath) < 0) {
@@ -617,7 +720,7 @@ int processCommand(int clientFd, packet_t *packet, char *buf) {
         DataType dataType;
 
         log_debug("Waiting for download confirmation...");
-        int ret = recvResponse(clientFd, responseBuf, sizeof(responseBuf), &statusCode, &dataType);
+        ret = recvResponse(clientFd, responseBuf, sizeof(responseBuf), &statusCode, &dataType);
         if (ret < 0) {
             log_error("Failed to receive download confirmation");
             return -1;
@@ -634,6 +737,7 @@ int processCommand(int clientFd, packet_t *packet, char *buf) {
         }
 
         log_debug("download complete");
+        return 0;
     }
     return 0;
 }

@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-20 16:37:17
+ * @LastEditTime : 2025-12-20 23:17:58
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "command.h"
@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include "list.h"
 #include "login.h"
+#include "tools.h"
 extern ListNode *userList;
 static char currentVirtualPath[PATH_MAX_LENGTH] = "/";
 /**
@@ -53,6 +54,56 @@ ssize_t sendResponse(int peerFd, ResponseStatus statusCode, DataType dataType, c
     }
     log_info("Response sent successfully: %zu bytes", sizeof(header) + dataLen);
     return sizeof(header) + dataLen;
+}
+/**
+ * @brief 检查是否存在某一文件
+ * @param task 执行该检查的线程
+ */
+void checkPartialFile(task_t *task) {
+    log_info("client request check partial file,receive data: %s", task->data);
+    char filename[256], checksum[33];
+    uint32_t expectedSize;
+    char response[RESPONSE_LENGTH] = {0};
+    ResponseStatus statusCode = STATUS_SUCCESS;
+
+    // 解析请求：filename|fileSize|checksum
+    if (sscanf(task->data, "%255[^|]|%u|%32s", filename, &expectedSize, checksum) != 3) {
+        statusCode = STATUS_INVALID_PARAM;
+        strcpy(response, "0");
+        goto send_response;
+    }
+
+    // 构造部分文件路径
+    char partialPath[PATH_MAX_LENGTH];
+    char currentRealPath[PATH_MAX_LENGTH];
+
+    if (virtualPathToReal(currentVirtualPath, currentRealPath, sizeof(currentRealPath)) < 0) {
+        statusCode = STATUS_FAIL;
+        strcpy(response, "0");
+        goto send_response;
+    }
+
+    snprintf(partialPath, sizeof(partialPath), "%s/%s", currentRealPath, filename);
+
+    // 检查部分文件
+    struct stat st;
+    if (stat(partialPath, &st) == 0 && S_ISREG(st.st_mode)) {
+        uint32_t partialSize = (uint32_t)st.st_size;
+
+        // 验证部分文件有效性（大小合理）
+        if (partialSize < expectedSize) {
+            snprintf(response, sizeof(response), "%u", partialSize);
+        } else {
+            // 部分文件大小异常，删除重传
+            unlink(partialPath);
+            strcpy(response, "0");
+        }
+    } else {
+        strcpy(response, "0");
+    }
+send_response:
+    log_info("check partial file response:%s", response);
+    sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, strlen(response));
 }
 /**
  * @brief        : 当前工作目录命令
@@ -210,6 +261,9 @@ send_response:
         log_info("ls command completed: status=%d, items=%d, bytes=%zu", statusCode, count, offset);
     }
 }
+/**
+ * @brief 进入某一目录的命令
+ */
 void cdCommand(task_t *task) {
     log_info("Executing cd command (fd=%d)", task->peerFd);
     char currentRealPath[PATH_MAX_LENGTH];
@@ -564,8 +618,33 @@ void notCommand(task_t *task) {
         log_info("Sent command help to client (fd=%d)", task->peerFd);
     }
 }
+/**
+ * @brief 上传文件服务器的处理
+ * @param task 处理的线程
+ */
 void putsCommand(task_t *task) {
     log_info("Executing puts command (fd=%d)", task->peerFd);
+
+    // 接收文件传输头
+    file_transfer_header_t header;
+    int ret = recvn(task->peerFd, &header, sizeof(header));
+    log_info("receive file header:fileSize=%u,offset=%u,mode=%d,filename=%s,checkSum=%s");
+    if (ret != sizeof(header)) {
+        log_error("Failed to receive transfer header");
+        return;
+    }
+    // 转换网络字节序
+    uint32_t fileSize = ntohl(header.fileSize);
+    uint32_t offset = ntohl(header.offset);
+
+    /**
+     *     
+    uint32_t fileSize;  // 文件总大小
+    uint32_t offset;    // 传输起始偏移量
+    TransferMode mode;  // 传输模式
+    char filename[256]; // 文件名
+    char checksum[33];  // MD5校验和（可选）
+     */
     ResponseStatus statusCode = STATUS_SUCCESS;
     char fileDestVirtualPath[PATH_MAX_LENGTH] = {0}; // 文件目标虚拟路径
     char fileDestrealPath[PATH_MAX_LENGTH] = {0};    // 文件目标真实路径
@@ -574,7 +653,7 @@ void putsCommand(task_t *task) {
     char response[RESPONSE_LENGTH] = {0};
     size_t responseLen = 0;
     int fd = -1;
-
+    // task->data = test.txt destpath
     // 1. 检查文件名是否为空
     if (task->data[0] == '\0') {
         log_error("puts: Empty filename");
@@ -609,48 +688,32 @@ void putsCommand(task_t *task) {
     }
 
     log_debug("Full file path: %s", fileFullPath);
-
-    // 5. 接收文件大小
-    uint32_t fileSizeNet = 0;
-    int ret = recvn(task->peerFd, (void *)&fileSizeNet, sizeof(fileSizeNet));
-    if (ret != sizeof(fileSizeNet)) {
-        log_error("Failed to receive file size: ret=%d", ret);
-        statusCode = STATUS_FAIL;
-        responseLen =
-            snprintf(response, sizeof(response), "puts error: failed to receive file size\n");
-        goto send_response;
-    }
-
-    off_t fileSize = (off_t)ntohl(fileSizeNet); // 转换字节序（如果需要）
-    log_info("File size to receive: %ld bytes", fileSize);
-
-    // 6. 检查文件大小是否合理
-    if (fileSize <= 0 || fileSize > MAX_FILE_SIZE) { // 需要定义 MAX_FILE_SIZE
-        log_error("Invalid file size: %ld", fileSize);
-        statusCode = STATUS_FAIL;
-        responseLen = snprintf(response, sizeof(response), "puts error: invalid file size\n");
-        goto send_response;
-    }
-
-    // 7. 创建文件
-    fd = open(fileFullPath, O_CREAT | O_WRONLY | O_TRUNC, 0644);
-    if (fd < 0) {
-        log_error("Failed to create file: %s: %s", fileFullPath, strerror(errno));
-        statusCode = STATUS_FAIL;
-        if (errno == EACCES) {
-            responseLen = snprintf(response, sizeof(response), "puts error: permission denied\n");
-        } else if (errno == ENOSPC) {
-            responseLen =
-                snprintf(response, sizeof(response), "puts error: no space left on device\n");
-        } else {
-            responseLen =
-                snprintf(response, sizeof(response), "puts error: failed to create file\n");
+    // 根据传输模式打开文件
+    if (header.mode == TRANSFER_MODE_RESUME && offset > 0) {
+        // 断点续传模式：追加写入部分文件
+        fd = open(fileFullPath, O_WRONLY | O_APPEND);
+        if (fd < 0) {
+            log_error("Failed to open partial file for resume: %s", fileFullPath);
+            statusCode = STATUS_FAIL;
+            responseLen = snprintf(response, sizeof(response), "Failed to resume transfer\n");
+            goto send_response;
         }
-        goto send_response;
+        log_info("Resuming file transfer from offset: %u", offset);
+    } else {
+        // 正常模式：创建新的部分文件
+        fd = open(fileFullPath, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+        if (fd < 0) {
+            log_error("Failed to create partial file: %s", fileFullPath);
+            statusCode = STATUS_FAIL;
+            responseLen = snprintf(response, sizeof(response), "Failed to create file\n");
+            goto send_response;
+        }
+        offset = 0;
+        log_info("Starting new file transfer");
     }
 
     // 8. 接收文件内容
-    off_t totalReceived = 0;
+    off_t totalReceived = offset;
     char buff[RECEIVE_FILE_BUFF_SIZE];
 
     while (totalReceived < fileSize) {
@@ -681,32 +744,28 @@ void putsCommand(task_t *task) {
         totalReceived += ret;
         log_debug("Received %ld/%ld bytes", totalReceived, fileSize);
     }
-
-    // 9. 验证文件大小
-    if (totalReceived != fileSize) {
-        log_error("File size mismatch: expected=%ld, received=%ld", fileSize, totalReceived);
-        statusCode = STATUS_FAIL;
-        responseLen = snprintf(response, sizeof(response), "puts error: file size mismatch\n");
-        goto cleanup_file;
-    }
-
     // 10. 成功完成
     close(fd);
     fd = -1;
+    // 9. 验证文件大小
+    // 传输完成，将部分文件重命名为最终文件
+    if (totalReceived == fileSize) {
+        log_info("File transfer completed: %s (%u bytes)", fileFullPath, fileSize);
+        responseLen =
+            snprintf(response, sizeof(response), "File '%s' uploaded successfully (%u bytes)\n",
+                     header.filename, fileSize);
+    } else {
+        log_error("File size mismatch: expected=%u, received=%u", fileSize, totalReceived);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "Transfer incomplete\n");
+    }
 
-    log_info("File uploaded successfully: %s (%ld bytes)", fileFullPath, fileSize);
-    responseLen = snprintf(response, sizeof(response),
-                           "File '%s' uploaded successfully (%ld bytes)\n", fileName, fileSize);
     goto send_response;
 
 cleanup_file:
     if (fd >= 0) {
         close(fd);
         fd = -1;
-        // 删除不完整的文件
-        if (unlink(fileFullPath) < 0) {
-            log_warn("Failed to remove incomplete file: %s", fileFullPath);
-        }
     }
 
 send_response:
@@ -716,14 +775,13 @@ send_response:
         log_info("puts command completed: status=%d, file=%s", statusCode, fileName);
     }
 
-    // 清理资源
-    if (fd >= 0) {
-        close(fd);
-    }
-
     // 重新添加到 epoll 监听
     addEpollReadFd(task->epFd, task->peerFd);
 }
+/**
+ * @brief 下载文件的命令
+ * @param task 对应线程
+ */
 void getsCommand(task_t *task) {
     log_info("Executing gets command (fd=%d)", task->peerFd);
     log_info("gets file path: %s", task->data);
@@ -820,6 +878,10 @@ send_response:
         log_info("gets command completed: status=%d, file path=%s", statusCode, task->data);
     }
 }
+/**
+ * @brief 校验用户密码，
+ * @param task 对应的线程
+ */
 void userLoginVerifyUsername(task_t *task) {
     log_info("username login Verify username(%s).", task->data);
     ListNode *pNode = userList;
@@ -853,6 +915,10 @@ void userLoginVerifyUsername(task_t *task) {
         sendResponse(task->peerFd, STATUS_FAIL, DATA_TYPE_TEXT, response, responseLen);
     }
 }
+/**
+ * @brief 校验用户密码，
+ * @param task 对应的线程
+ */
 void userLoginVerifyPassword(task_t *task) {
     log_info("Password verification for cryptograph: %s", task->data);
     ListNode *pNode = userList;
@@ -934,6 +1000,9 @@ void executeCmd(task_t *task) {
             break;
         case CMD_TYPE_GETS:
             getsCommand(task);
+            break;
+        case CMD_TYPE_CHECK_PARTIAL:
+            checkPartialFile(task);
             break;
         case TASK_LOGIN_VERIFY_USERNAME:
             userLoginVerifyUsername(task);

@@ -34,6 +34,7 @@ set(CLIENT_SRCS
     "${COMMON_SRC}/protocol.c"
     "${UTILS_SRC}/hashtable.c"
     "${UTILS_SRC}/log.c"
+    "${UTILS_SRC}/tools.c"
     "${CONFIG_SRC}/config.c"
 )
 
@@ -65,7 +66,7 @@ target_include_directories(CloudDiskServer PRIVATE
     ${PROJECT_SOURCE_DIR}/include/server
     ${PROJECT_SOURCE_DIR}/include/utils
     ${PROJECT_SOURCE_DIR}/include/config
-     ${PROJECT_SOURCE_DIR}/include/auth
+    ${PROJECT_SOURCE_DIR}/include/auth
 )
 
 # 客户端包含目录
@@ -79,17 +80,19 @@ target_include_directories(CloudDiskClient PRIVATE
 
 # 查找线程库
 find_package(Threads REQUIRED)
-
+find_package(OpenSSL REQUIRED)
 
 # 服务器链接库
-target_link_libraries(CloudDiskServer PRIVATE 
+target_link_libraries(CloudDiskServer PRIVATE
     Threads::Threads
     crypt
+    OpenSSL::SSL
 )
 
 # 客户端链接库
 target_link_libraries(CloudDiskClient PRIVATE
     crypt
+    OpenSSL::SSL
 )
 
 # 安装规则(可选)
