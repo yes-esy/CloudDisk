@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-21 21:27:03
+ * @LastEditTime : 2025-12-21 23:00:00
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "command.h"
@@ -23,6 +23,7 @@
 #include "list.h"
 #include "login.h"
 #include "tools.h"
+#include <sys/mman.h>
 extern ListNode *userList;
 static char currentVirtualPath[PATH_MAX_LENGTH] = "/";
 /**
@@ -82,9 +83,7 @@ void checkPartialFile(task_t *task) {
         strcpy(response, "0");
         goto send_response;
     }
-
     snprintf(partialPath, sizeof(partialPath), "%s/%s", currentRealPath, filename);
-
     // 检查部分文件
     struct stat st;
     if (stat(partialPath, &st) == 0 && S_ISREG(st.st_mode)) {
@@ -619,6 +618,157 @@ void notCommand(task_t *task) {
     }
 }
 /**
+ * @brief 使用 mmap 接收大文件
+ * @return 0 成功，-1 失败
+ */
+static int receiveFileWithMmap(int sockFd, const char *filePath, uint32_t fileSize, uint32_t offset,
+                               char *response, size_t responseSize) {
+    int fd = -1;
+    void *mapped = MAP_FAILED;
+    int result = -1;
+
+    // 计算需要接收的数据量
+    uint32_t dataToReceive = fileSize - offset;
+
+    // 打开/创建文件
+    if (offset > 0) {
+        fd = open(filePath, O_RDWR);
+    } else {
+        fd = open(filePath, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    }
+
+    if (fd < 0) {
+        log_error("Failed to open file for mmap: %s", filePath);
+        snprintf(response, responseSize, "puts error: failed to open file\n");
+        return -1;
+    }
+
+    // 扩展文件到目标大小
+    if (ftruncate(fd, fileSize) < 0) {
+        log_error("Failed to extend file: %s", strerror(errno));
+        snprintf(response, responseSize, "puts error: failed to allocate space\n");
+        goto cleanup;
+    }
+
+    // 映射文件到内存（从 offset 开始的部分）
+    mapped = mmap(NULL, dataToReceive, PROT_WRITE, MAP_SHARED, fd, offset);
+    if (mapped == MAP_FAILED) {
+        log_error("mmap failed: %s", strerror(errno));
+        snprintf(response, responseSize, "puts error: mmap failed\n");
+        goto cleanup;
+    }
+
+    log_info("File mapped successfully: size=%u, offset=%u, dataToReceive=%u", fileSize, offset,
+             dataToReceive);
+
+    // 直接接收数据到映射内存
+    uint32_t totalReceived = 0;
+    char *writePtr = (char *)mapped;
+
+    while (totalReceived < dataToReceive) {
+        uint32_t remaining = dataToReceive - totalReceived;
+        size_t toReceive =
+            (remaining < RECEIVE_FILE_BUFF_SIZE) ? remaining : RECEIVE_FILE_BUFF_SIZE;
+
+        ssize_t ret = recvn(sockFd, writePtr, toReceive);
+        if (ret <= 0) {
+            log_error("Failed to receive file data: ret=%zd, received=%u/%u", ret, totalReceived,
+                      dataToReceive);
+            snprintf(response, responseSize, "puts error: file transfer interrupted\n");
+            goto cleanup;
+        }
+
+        writePtr += ret;
+        totalReceived += ret;
+
+        // log_debug("Received %u/%u bytes (mmap mode)", totalReceived, dataToReceive);
+    }
+
+    // 同步到磁盘
+    if (msync(mapped, dataToReceive, MS_SYNC) < 0) {
+        log_warn("msync failed: %s", strerror(errno));
+    }
+
+    log_info("File transfer completed (mmap): %s (%u bytes)", filePath, fileSize);
+    result = 0;
+
+cleanup:
+    if (mapped != MAP_FAILED) {
+        munmap(mapped, dataToReceive);
+    }
+    if (fd >= 0) {
+        close(fd);
+    }
+    return result;
+}
+/**
+ * @brief 使用传统方式接收文件
+ * @return 0 成功，-1 失败
+ */
+static int receiveFileTraditional(int sockFd, const char *filePath, uint32_t fileSize,
+                                  uint32_t offset, TransferMode mode, char *response,
+                                  size_t responseSize) {
+    int fd = -1;
+    int result = -1;
+
+    // 根据传输模式打开文件
+    if (mode == TRANSFER_MODE_RESUME && offset > 0) {
+        fd = open(filePath, O_WRONLY | O_APPEND);
+        if (fd < 0) {
+            log_error("Failed to open partial file for resume: %s", filePath);
+            snprintf(response, responseSize, "Failed to resume transfer\n");
+            return -1;
+        }
+        log_info("Resuming file transfer from offset: %u", offset);
+    } else {
+        fd = open(filePath, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+        if (fd < 0) {
+            log_error("Failed to create file: %s", filePath);
+            snprintf(response, responseSize, "Failed to create file\n");
+            return -1;
+        }
+        offset = 0;
+        log_info("Starting new file transfer");
+    }
+
+    // 接收文件内容
+    uint32_t totalReceived = offset;
+    char buff[RECEIVE_FILE_BUFF_SIZE];
+
+    while (totalReceived < fileSize) {
+        uint32_t remaining = fileSize - totalReceived;
+        size_t toReceive =
+            (remaining < RECEIVE_FILE_BUFF_SIZE) ? remaining : RECEIVE_FILE_BUFF_SIZE;
+
+        ssize_t ret = recvn(sockFd, buff, toReceive);
+        if (ret <= 0) {
+            log_error("Failed to receive file data: ret=%zd, received=%u/%u", ret, totalReceived,
+                      fileSize);
+            snprintf(response, responseSize, "puts error: file transfer interrupted\n");
+            goto cleanup;
+        }
+
+        ssize_t written = write(fd, buff, ret);
+        if (written != ret) {
+            log_error("Failed to write file data: written=%zd, expected=%zd", written, ret);
+            snprintf(response, responseSize, "puts error: failed to write file\n");
+            goto cleanup;
+        }
+
+        totalReceived += ret;
+        log_debug("Received %u/%u bytes", totalReceived, fileSize);
+    }
+
+    result = 0;
+
+cleanup:
+    if (fd >= 0) {
+        close(fd);
+    }
+    return result;
+}
+
+/**
  * @brief 上传文件服务器的处理
  * @param task 处理的线程
  */
@@ -628,23 +778,18 @@ void putsCommand(task_t *task) {
     // 接收文件传输头
     file_transfer_header_t header;
     int ret = recvn(task->peerFd, &header, sizeof(header));
-    log_info("receive file header:fileSize=%u,offset=%u,mode=%d,filename=%s,checkSum=%s");
     if (ret != sizeof(header)) {
         log_error("Failed to receive transfer header");
+        // 无法发送响应，因为可能连接已断开
+        addEpollReadFd(task->epFd, task->peerFd);
         return;
     }
     // 转换网络字节序
     uint32_t fileSize = ntohl(header.fileSize);
     uint32_t offset = ntohl(header.offset);
+    log_info("Received file header: fileSize=%u, offset=%u, mode=%d, filename=%s, checkSum=%s",
+             fileSize, offset, header.mode, header.filename, header.checksum);
 
-    /**
-     *     
-    uint32_t fileSize;  // 文件总大小
-    uint32_t offset;    // 传输起始偏移量
-    TransferMode mode;  // 传输模式
-    char filename[256]; // 文件名
-    char checksum[33];  // MD5校验和（可选）
-     */
     ResponseStatus statusCode = STATUS_SUCCESS;
     char fileDestVirtualPath[PATH_MAX_LENGTH] = {0}; // 文件目标虚拟路径
     char fileDestrealPath[PATH_MAX_LENGTH] = {0};    // 文件目标真实路径
@@ -668,9 +813,7 @@ void putsCommand(task_t *task) {
         log_error("Failed to extract filename from: %s", task->data);
         strcpy(fileName, task->data); // 如果解析失败，直接使用原始数据作为文件名
     }
-
-    log_info("File to upload: %s", fileName);
-
+    log_info("File to upload: %s -> %s", fileName, fileDestVirtualPath);
     // 3. 获取当前真实路径
     if (virtualPathToReal(fileDestVirtualPath, fileDestrealPath, sizeof(fileDestrealPath)) < 0) {
         log_error("Virtual path conversion failed: %s", fileDestVirtualPath);
@@ -678,7 +821,6 @@ void putsCommand(task_t *task) {
         responseLen = snprintf(response, sizeof(response), "puts error: path conversion failed\n");
         goto send_response;
     }
-
     // 4. 构造完整文件路径
     if (getFileFullPath(fileName, fileDestrealPath, fileFullPath) < 0) {
         log_error("Failed to get full file path: %s", fileName);
@@ -686,88 +828,38 @@ void putsCommand(task_t *task) {
         responseLen = snprintf(response, sizeof(response), "puts error: invalid file path\n");
         goto send_response;
     }
-
     log_debug("Full file path: %s", fileFullPath);
     // 根据传输模式打开文件
-    if (header.mode == TRANSFER_MODE_RESUME && offset > 0) {
-        // 断点续传模式：追加写入部分文件
-        fd = open(fileFullPath, O_WRONLY | O_APPEND);
-        if (fd < 0) {
-            log_error("Failed to open partial file for resume: %s", fileFullPath);
-            statusCode = STATUS_FAIL;
-            responseLen = snprintf(response, sizeof(response), "Failed to resume transfer\n");
-            goto send_response;
-        }
-        log_info("Resuming file transfer from offset: %u", offset);
+    // 5. 根据文件大小选择传输方式
+    int transferResult;
+    uint32_t dataToReceive = fileSize - offset;
+
+    if (dataToReceive >= MMAP_THRESHOLD) {
+        // 大文件：使用 mmap
+        log_info("Using mmap for large file transfer (%u bytes)", dataToReceive);
+        transferResult = receiveFileWithMmap(task->peerFd, fileFullPath, fileSize, offset, response,
+                                             sizeof(response));
     } else {
-        // 正常模式：创建新的部分文件
-        fd = open(fileFullPath, O_CREAT | O_WRONLY | O_TRUNC, 0644);
-        if (fd < 0) {
-            log_error("Failed to create partial file: %s", fileFullPath);
-            statusCode = STATUS_FAIL;
-            responseLen = snprintf(response, sizeof(response), "Failed to create file\n");
-            goto send_response;
-        }
-        offset = 0;
-        log_info("Starting new file transfer");
+        // 小文件：使用传统方式
+        log_info("Using traditional method for file transfer (%u bytes)", dataToReceive);
+        transferResult = receiveFileTraditional(task->peerFd, fileFullPath, fileSize, offset,
+                                                header.mode, response, sizeof(response));
     }
-
-    // 8. 接收文件内容
-    off_t totalReceived = offset;
-    char buff[RECEIVE_FILE_BUFF_SIZE];
-
-    while (totalReceived < fileSize) {
-        off_t remaining = fileSize - totalReceived;
-        size_t toReceive =
-            (remaining < RECEIVE_FILE_BUFF_SIZE) ? remaining : RECEIVE_FILE_BUFF_SIZE;
-
-        ret = recvn(task->peerFd, buff, toReceive);
-        if (ret <= 0) {
-            log_error("Failed to receive file data: ret=%d, received=%ld/%ld", ret, totalReceived,
-                      fileSize);
-            statusCode = STATUS_FAIL;
-            responseLen =
-                snprintf(response, sizeof(response), "puts error: file transfer interrupted\n");
-            goto cleanup_file;
-        }
-
-        // 写入文件
-        ssize_t written = write(fd, buff, ret);
-        if (written != ret) {
-            log_error("Failed to write file data: written=%zd, expected=%d", written, ret);
-            statusCode = STATUS_FAIL;
-            responseLen =
-                snprintf(response, sizeof(response), "puts error: failed to write file\n");
-            goto cleanup_file;
-        }
-
-        totalReceived += ret;
-        log_debug("Received %ld/%ld bytes", totalReceived, fileSize);
+    if (transferResult < 0) {
+        statusCode = STATUS_FAIL;
+        responseLen = strlen(response);
+        goto send_response;
     }
-    // 10. 成功完成
-    close(fd);
-    fd = -1;
-    // 9. 验证文件大小
-    // 传输完成，将部分文件重命名为最终文件
-    if (totalReceived == fileSize) {
-        log_info("File transfer completed: %s (%u bytes)", fileFullPath, fileSize);
+    if (offset > 0) {
+        responseLen =
+            snprintf(response, sizeof(response),
+                     "File '%s' resumed and uploaded successfully (%u bytes, from offset %u)\n",
+                     header.filename, fileSize, offset);
+    } else {
         responseLen =
             snprintf(response, sizeof(response), "File '%s' uploaded successfully (%u bytes)\n",
                      header.filename, fileSize);
-    } else {
-        log_error("File size mismatch: expected=%u, received=%u", fileSize, totalReceived);
-        statusCode = STATUS_FAIL;
-        responseLen = snprintf(response, sizeof(response), "Transfer incomplete\n");
     }
-
-    goto send_response;
-
-cleanup_file:
-    if (fd >= 0) {
-        close(fd);
-        fd = -1;
-    }
-
 send_response:
     if (sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, responseLen) < 0) {
         log_error("puts: Failed to send response to client (fd=%d)", task->peerFd);
@@ -778,6 +870,125 @@ send_response:
     // 重新添加到 epoll 监听
     addEpollReadFd(task->epFd, task->peerFd);
 }
+/**
+ * @brief 使用 mmap 发送大文件
+ * @return 0 成功，-1 失败
+ */
+static int sendFileWithMmap(int sockFd, const char *filePath, uint32_t fileSize, uint32_t offset,
+                            char *response, size_t responseSize) {
+    int fd = -1;
+    void *mapped = MAP_FAILED;
+    int result = -1;
+
+    uint32_t dataToSend = fileSize - offset;
+
+    fd = open(filePath, O_RDONLY);
+    if (fd < 0) {
+        log_error("Failed to open file for mmap: %s", filePath);
+        snprintf(response, responseSize, "gets error: failed to open file\n");
+        return -1;
+    }
+
+    // 映射文件到内存
+    mapped = mmap(NULL, fileSize, PROT_READ, MAP_SHARED, fd, 0);
+    if (mapped == MAP_FAILED) {
+        log_error("mmap failed: %s", strerror(errno));
+        snprintf(response, responseSize, "gets error: mmap failed\n");
+        goto cleanup;
+    }
+
+    // 建议内核顺序读取
+    madvise(mapped, fileSize, MADV_SEQUENTIAL);
+
+    log_info("File mapped successfully: size=%u, offset=%u, dataToSend=%u", fileSize, offset,
+             dataToSend);
+
+    // 从映射内存发送数据
+    uint32_t totalSent = 0;
+    const char *readPtr = (const char *)mapped + offset;
+
+    while (totalSent < dataToSend) {
+        uint32_t remaining = dataToSend - totalSent;
+        size_t toSend = (remaining < SEND_FILE_BUFF_SIZE) ? remaining : SEND_FILE_BUFF_SIZE;
+
+        ssize_t ret = sendn(sockFd, readPtr, toSend);
+        if (ret != (ssize_t)toSend) {
+            log_error("Failed to send file data: ret=%zd, expected=%zu", ret, toSend);
+            snprintf(response, responseSize, "gets error: file transfer failed\n");
+            goto cleanup;
+        }
+
+        readPtr += ret;
+        totalSent += ret;
+
+        // log_debug("Sent %u/%u bytes (mmap mode)", totalSent, dataToSend);
+    }
+
+    log_info("File transfer completed (mmap): %s (%u bytes sent)", filePath, totalSent);
+    result = 0;
+
+cleanup:
+    if (mapped != MAP_FAILED) {
+        munmap(mapped, fileSize);
+    }
+    if (fd >= 0) {
+        close(fd);
+    }
+    return result;
+}
+
+/**
+ * @brief 使用传统方式发送文件
+ */
+static int sendFileTraditional(int sockFd, const char *filePath, uint32_t fileSize, uint32_t offset,
+                               char *response, size_t responseSize) {
+    int fd = open(filePath, O_RDONLY);
+    if (fd < 0) {
+        log_error("Failed to open file: %s", filePath);
+        snprintf(response, responseSize, "gets error: file open error\n");
+        return -1;
+    }
+
+    // 跳转到 offset 位置
+    if (offset > 0) {
+        if (lseek(fd, offset, SEEK_SET) != (off_t)offset) {
+            log_error("Failed to seek to offset %u", offset);
+            close(fd);
+            snprintf(response, responseSize, "gets error: seek failed\n");
+            return -1;
+        }
+        log_info("Resuming download from offset: %u", offset);
+    }
+
+    uint32_t dataToSend = fileSize - offset;
+    uint32_t totalSent = 0;
+    char buff[SEND_FILE_BUFF_SIZE];
+
+    while (totalSent < dataToSend) {
+        ssize_t bytesRead = read(fd, buff, sizeof(buff));
+        if (bytesRead <= 0) {
+            log_error("read file error, bytesRead=%zd", bytesRead);
+            close(fd);
+            snprintf(response, responseSize, "gets error: file read error\n");
+            return -1;
+        }
+
+        ssize_t bytesSent = sendn(sockFd, buff, bytesRead);
+        if (bytesSent != bytesRead) {
+            log_error("send file data error, bytesSent=%zd, bytesRead=%zd", bytesSent, bytesRead);
+            close(fd);
+            snprintf(response, responseSize, "gets error: file send error\n");
+            return -1;
+        }
+
+        totalSent += bytesSent;
+        log_debug("Sent %u/%u bytes", totalSent, dataToSend);
+    }
+
+    close(fd);
+    return 0;
+}
+
 /**
  * @brief 下载文件的命令
  * @param task 对应线程
@@ -820,7 +1031,6 @@ void getsCommand(task_t *task) {
             snprintf(response, sizeof(response), "file get error(maby it is a directory).");
         goto send_response;
     }
-
     // 保存原始文件大小（主机字节序）
     uint32_t totalFileSize = (uint32_t)st.st_size;
     // 验证 offset 合法性
@@ -844,7 +1054,6 @@ void getsCommand(task_t *task) {
         responseLen = snprintf(response, sizeof(response), "gets error: send header failed\n");
         goto send_response;
     }
-
     // 如果客户端已经有完整文件，直接返回成功
     if (dataToSend == 0) {
         log_info("File already complete on client side");
@@ -853,69 +1062,30 @@ void getsCommand(task_t *task) {
         goto send_response;
     }
     // 打开文件
-    int fileFd = open(fileRealPath, O_RDONLY);
-    if (fileFd < 0) {
-        log_error("Failed to open file: %s", fileRealPath);
+    int transferResult;
+    if (dataToSend >= MMAP_THRESHOLD) {
+        log_info("Using mmap for large file transfer (%u bytes)", dataToSend);
+        transferResult = sendFileWithMmap(task->peerFd, fileRealPath, totalFileSize, clientOffset,
+                                          response, sizeof(response));
+    } else {
+        log_info("Using traditional method for file transfer (%u bytes)", dataToSend);
+        transferResult = sendFileTraditional(task->peerFd, fileRealPath, totalFileSize,
+                                             clientOffset, response, sizeof(response));
+    }
+    if (transferResult < 0) {
         statusCode = STATUS_FAIL;
-        responseLen = snprintf(response, sizeof(response), "file open error.");
+        responseLen = strlen(response);
         goto send_response;
     }
-    // 跳转到 offset 位置
-    if (clientOffset > 0) {
-        if (lseek(fileFd, clientOffset, SEEK_SET) != (off_t)clientOffset) {
-            log_error("Failed to seek to offset %u", clientOffset);
-            close(fileFd);
-            statusCode = STATUS_FAIL;
-            responseLen = snprintf(response, sizeof(response), "gets error: seek failed\n");
-            goto send_response;
-        }
-        log_info("Resuming download from offset: %u", clientOffset);
-    }
-
-    char buff[SEND_FILE_BUFF_SIZE];
-    uint32_t totalSend = 0;
-
-    while (totalSend < dataToSend) {
-        ssize_t bytesRead = read(fileFd, buff, sizeof(buff));
-        if (bytesRead <= 0) {
-            if (bytesRead < 0) {
-                log_error("read file error, bytesRead=%zd", bytesRead);
-            }
-            close(fileFd);
-            statusCode = STATUS_FAIL;
-            responseLen = snprintf(response, sizeof(response), "file read error.");
-            goto send_response;
-        }
-
-        ssize_t bytesSend = sendn(task->peerFd, buff, bytesRead);
-        if (bytesSend != bytesRead) {
-            log_error("send file data error, bytesSend!=bytesRead");
-            close(fileFd);
-            statusCode = STATUS_FAIL;
-            responseLen = snprintf(response, sizeof(response), "file send error.");
-            goto send_response;
-        }
-        totalSend += bytesSend;
-    }
-    close(fileFd);
-
-    // 验证传输完整性
-    if (totalSend != dataToSend) {
-        log_error("File transfer incomplete: %u/%u bytes", totalSend, dataToSend);
-        statusCode = STATUS_FAIL;
-        responseLen = snprintf(response, sizeof(response), "file transfer incomplete.");
-        goto send_response;
-    }
-
-    // 成功发送文件
+    // 8. 成功
     if (clientOffset > 0) {
         responseLen =
             snprintf(response, sizeof(response),
                      "File resumed and downloaded successfully (%u bytes, from offset %u).\n",
-                     totalSend, clientOffset);
+                     dataToSend, clientOffset);
     } else {
         responseLen = snprintf(response, sizeof(response),
-                               "File download successfully (%u bytes).\n", totalSend);
+                               "File download successfully (%u bytes).\n", dataToSend);
     }
 send_response:
     if (sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, responseLen) < 0) {

@@ -12,6 +12,10 @@
 #include <types.h>
 #include <stdio.h>
 #include "types.h"
+#include <sys/stat.h>
+#include "log.h"
+#include <string.h>
+#include "tools.h"
 #define PROMPT "CloudDisk> "
 #define COLOR_RESET "\033[0m"
 #define COLOR_BOLD "\033[1m"
@@ -21,7 +25,115 @@
 #define COLOR_YELLOW "\033[33m"
 extern char username[USERNAME_LENGTH];
 extern char workforlder[PATH_MAX_LENGTH];
+/**
+ * @brief 格式化文件大小显示（优化版，固定格式）
+ * @param bytes 字节数
+ * @param buffer 输出缓冲区
+ * @param size 缓冲区大小
+ */
+static void formatFileSize(uint32_t bytes, char *buffer, size_t size) {
+    if (bytes >= 1024 * 1024 * 1024) {
+        // GB级别
+        double gb = (double)bytes / (1024 * 1024 * 1024);
+        snprintf(buffer, size, "%.1f GB", gb);
+    } else if (bytes >= 1024 * 1024) {
+        // MB级别
+        double mb = (double)bytes / (1024 * 1024);
+        snprintf(buffer, size, "%.1f MB", mb);
+    } else if (bytes >= 1024) {
+        // KB级别
+        double kb = (double)bytes / 1024;
+        snprintf(buffer, size, "%.1f KB", kb);
+    } else {
+        // Bytes级别
+        snprintf(buffer, size, "%u B", bytes);
+    }
+}
 
+/**
+ * @brief 显示美化的进度条（固定长度，无闪烁）
+ * @param current 当前进度
+ * @param total 总量
+ * @param prefix 前缀文本
+ */
+static void showProgressBar(uint32_t current, uint32_t total, const char *prefix) {
+    const int barWidth = 50; // 固定进度条宽度
+    double progress = (double)current / total;
+    int pos = (int)(barWidth * progress);
+
+    // 清除当前行
+    printf("\r\033[K");
+
+    // 前缀（固定宽度）
+    printf("%-12s ", prefix ? prefix : "Progress");
+
+    // 进度条边框
+    printf("[");
+
+    // 进度条内容（固定50字符宽度）
+    for (int i = 0; i < barWidth; ++i) {
+        if (i < pos) {
+            printf("\033[42m \033[0m"); // 绿色背景
+        } else {
+            printf(" "); // 空格
+        }
+    }
+
+    printf("] ");
+
+    // 百分比（固定6字符宽度：xxx.x%）
+    printf("%5.1f%%", progress * 100.0);
+
+    // 文件大小信息（格式化为固定宽度）
+    char currentStr[16], totalStr[16];
+    formatFileSize(current, currentStr, sizeof(currentStr));
+    formatFileSize(total, totalStr, sizeof(totalStr));
+
+    // 固定宽度的大小显示（每个大小字段预留8字符）
+    printf(" (%8s/%8s)", currentStr, totalStr);
+
+    fflush(stdout);
+}
+
+/**
+ * @brief 获取本地文件信息
+ */
+typedef struct {
+    uint32_t fileSize;
+    char md5Checksum[33];
+    char filename[FILENAME_LENGTH];
+} LocalFileInfo;
+
+static int getLocalFileInfo(const char *filepath, LocalFileInfo *info) {
+    struct stat st;
+    if (stat(filepath, &st) < 0) {
+        log_error("Failed to stat file: %s", filepath);
+        return -1;
+    }
+
+    info->fileSize = (uint32_t)st.st_size;
+
+    if (calculateFileMD5(filepath, info->md5Checksum) < 0) {
+        log_error("Failed to calculate file checksum");
+        return -1;
+    }
+
+    const char *filename = strrchr(filepath, '/');
+    strncpy(info->filename, filename ? filename + 1 : filepath, sizeof(info->filename) - 1);
+
+    return 0;
+}
+
+/**
+ * @brief 检查本地部分文件
+ */
+static uint32_t getLocalPartialFileSize(const char *filepath) {
+    struct stat st;
+    if (stat(filepath, &st) == 0) {
+        return (uint32_t)st.st_size;
+    }
+    return 0;
+}
 
 /**
  * @brief : 用户登录 
@@ -112,4 +224,5 @@ int processServer(int clientFd, char *buf, int bufLen);
  */
 int processClient(int clientFd, fd_set *rdset);
 
+int processResponse(int clientFd, const char *mode);
 #endif /* CLOUDDISK_CLIENT_H */
