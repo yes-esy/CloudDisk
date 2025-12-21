@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-20 16:39:05
+ * @LastEditTime : 2025-12-21 21:26:28
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
  **/
 #include "net.h"
@@ -75,7 +75,7 @@ int main(int argc, char **argv) {
                     addEpollReadFd(epollFd, peerFd);
                     user_info_t *userNode = (user_info_t *)calloc(1, sizeof(user_info_t));
                     if (userNode) {
-                        userNode->sockfd = peerFd; // ✅ 设置 socket fd
+                        userNode->sockfd = peerFd;
                         appendNode(&userList, userNode);
                     }
                 }

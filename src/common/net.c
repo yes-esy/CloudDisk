@@ -4,13 +4,99 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-13 23:33:07
+ * @LastEditTime : 2025-12-21 17:43:56
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "net.h"
 #include <string.h>
 #include <unistd.h>
 #include <stdlib.h>
+/**
+ * @brief 发送请求给服务器
+ * @param clientFd 客户端socket
+ * @param packet 数据包
+ * @return 成功返回发送字节数,失败返回-1
+ */
+int sendRequest(int clientFd, const packet_t *packet) {
+    if (!packet) {
+        return -1;
+    }
+    packet_t netPacket;
+    netPacket.len = htonl(packet->len);
+    netPacket.cmdType = htonl(packet->cmdType);
+    memcpy(netPacket.buff, packet->buff, packet->len);
+    size_t totalSize = sizeof(netPacket.len) + sizeof(netPacket.cmdType) + packet->len;
+    int ret = sendn(clientFd, &netPacket, totalSize);
+    if (ret != (int)totalSize) {
+        perror("sendRequest failed");
+        return -1;
+    }
+    return ret;
+}
+/**
+ * @brief 接收服务器响应(只负责接收,不处理数据)
+ * @param clientFd 客户端socket
+ * @param buf 接收缓冲区
+ * @param bufLen 缓冲区大小
+ * @param statusCode 输出参数:状态码
+ * @param dataType 输出参数:数据类型
+ * @return 成功返回接收的数据长度,失败返回-1,连接关闭返回0
+ */
+int recvResponse(int clientFd, char *buf, int bufLen, ResponseStatus *statusCode,
+                 DataType *dataType) {
+    if (!buf || bufLen <= 0 || !statusCode || !dataType) {
+        return -1;
+    }
+    // 1. 接收响应头
+    response_header_t header;
+    int ret = recvn(clientFd, &header, sizeof(header));
+    if (ret != sizeof(header)) {
+        if (ret == 0) {
+            return 0; // 连接关闭
+        }
+        perror("recv response header");
+        return -1;
+    }
+    // 2. 转换网络字节序并恢复枚举类型
+    uint32_t dataLen = ntohl(header.dataLen);
+    *statusCode = (ResponseStatus)ntohl((uint32_t)header.statusCode);
+    *dataType = (DataType)ntohl((uint32_t)header.dataType);
+    // 3. 检查数据长度
+    if (dataLen == 0) {
+        return 0;
+    }
+    if (dataLen >= (uint32_t)bufLen) {
+        fprintf(stderr, "Response too large: %u bytes (buffer: %d)\n", dataLen, bufLen);
+        return -1;
+    }
+    // 4. 接收响应数据
+    ret = recvn(clientFd, buf, dataLen);
+    if (ret != (int)dataLen) {
+        perror("recv response data");
+        return -1;
+    }
+    buf[ret] = '\0';
+    return ret;
+}
+/**
+ * @brief 发送文件传输头部信息
+ * @param sockfd socket
+ * @param fileSize 文件大小
+ * @param offset 文件偏移
+ * @param fileName 文件名
+ * @param checkSum 校验和
+ */
+int sendFileHeader(int sockfd, uint32_t fileSize, uint32_t offset, const char *fileName,
+                   const char *checkSum) {
+    file_transfer_header_t header;
+    memset(&header, 0, sizeof(header));
+    header.fileSize = htonl(fileSize);
+    header.offset = htonl(offset);
+    header.mode = (offset > 0) ? TRANSFER_MODE_RESUME : TRANSFER_MODE_NORMAL;
+    strncpy(header.filename, fileName, sizeof(header.filename) - 1);
+    strncpy(header.checksum, checkSum, sizeof(header.checksum) - 1);
+    return sendn(sockfd, &header, sizeof(header));
+}
 /**
  * @brief        : 建立socket
  * @param         {char} *ip: ip地址

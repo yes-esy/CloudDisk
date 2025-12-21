@@ -63,5 +63,33 @@ int addEpollReadFd(int epollFd, int fd);
  * @return 成功返回0,失败返回-1
  */
 int delEpollReadfd(int epollFd, int fd);
+/**
+ * @brief 发送请求给服务器
+ * @param clientFd 客户端socket
+ * @param packet 数据包
+ * @return 成功返回发送字节数,失败返回-1
+ */
+int sendRequest(int clientFd, const packet_t *packet);
+/**
+ * @brief 接收服务器响应(只负责接收,不处理数据)
+ * @param clientFd 客户端socket
+ * @param buf 接收缓冲区
+ * @param bufLen 缓冲区大小
+ * @param statusCode 输出参数:状态码
+ * @param dataType 输出参数:数据类型
+ * @return 成功返回接收的数据长度,失败返回-1,连接关闭返回0
+ */
+int recvResponse(int clientFd, char *buf, int bufLen, ResponseStatus *statusCode,
+                 DataType *dataType);
+/**
+ * @brief 发送文件传输头部信息
+ * @param sockfd socket
+ * @param fileSize 文件大小
+ * @param offset 文件偏移
+ * @param fileName 文件名
+ * @param checkSum 校验和
+ */
+int sendFileHeader(int sockfd, uint32_t fileSize, uint32_t offset, const char *fileName,
+                   const char *checkSum);
 
 #endif /* CLOUDDISK_NET_H */

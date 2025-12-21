@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-20 23:17:58
+ * @LastEditTime : 2025-12-21 21:27:03
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "command.h"
@@ -787,15 +787,26 @@ void getsCommand(task_t *task) {
     log_info("gets file path: %s", task->data);
     char response[RESPONSE_LENGTH] = {0};
     char fileRealPath[PATH_MAX_LENGTH] = {0};
+    char fileVirtualPath[PATH_MAX_LENGTH] = {0};
     ResponseStatus statusCode = STATUS_SUCCESS;
     int responseLen = 0;
+    uint32_t clientOffset = 0;
+    // 解析请求: "virtualPath|offset"
+    if (sscanf(task->data, "%[^|]|%u", fileVirtualPath, &clientOffset) < 1) {
+        log_error("Invalid gets request format: %s", task->data);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "gets error: invalid request format\n");
+        goto send_response;
+    }
+    log_info("Gets request: path=%s, offset=%u", fileVirtualPath, clientOffset);
 
-    if (virtualPathToReal(task->data, fileRealPath, sizeof(fileRealPath)) < 0) {
-        log_error("Virtual path conversion failed: %s", task->data);
+    if (virtualPathToReal(fileVirtualPath, fileRealPath, sizeof(fileRealPath)) < 0) {
+        log_error("Virtual path conversion failed: %s", fileVirtualPath);
         statusCode = STATUS_FAIL;
         responseLen = snprintf(response, sizeof(response), "gets error: path conversion failed\n");
         goto send_response;
     }
+    log_info("File real path=%s", fileRealPath);
 
     // 检查文件存在且为普通文件
     struct stat st;
@@ -811,17 +822,36 @@ void getsCommand(task_t *task) {
     }
 
     // 保存原始文件大小（主机字节序）
-    uint32_t originalFileSize = (uint32_t)st.st_size;
-
-    // 发送文件大小（网络字节序）
-    uint32_t fileSizeNet = htonl(originalFileSize);
-    if (sendn(task->peerFd, &fileSizeNet, sizeof(fileSizeNet)) != sizeof(fileSizeNet)) {
-        log_error("Failed to send file size");
+    uint32_t totalFileSize = (uint32_t)st.st_size;
+    // 验证 offset 合法性
+    if (clientOffset > totalFileSize) {
+        log_error("Invalid offset: %u > file size %u", clientOffset, totalFileSize);
         statusCode = STATUS_FAIL;
-        responseLen = snprintf(response, sizeof(response), "file size send error(unknown error).");
+        responseLen = snprintf(response, sizeof(response), "gets error: invalid offset\n");
+        goto send_response;
+    }
+    // 计算需要发送的数据量
+    uint32_t dataToSend = totalFileSize - clientOffset;
+    // 提取文件名
+    const char *filename = strrchr(fileRealPath, '/');
+    filename = filename ? filename + 1 : fileRealPath;
+    char checkSum[33];
+    calculateFileMD5(fileRealPath, checkSum);
+    if (sendFileHeader(task->peerFd, totalFileSize, clientOffset, filename, checkSum)
+        != sizeof(file_transfer_header_t)) {
+        log_error("Failed to send file header");
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "gets error: send header failed\n");
         goto send_response;
     }
 
+    // 如果客户端已经有完整文件，直接返回成功
+    if (dataToSend == 0) {
+        log_info("File already complete on client side");
+        responseLen = snprintf(response, sizeof(response), "File already downloaded (%u bytes).\n",
+                               totalFileSize);
+        goto send_response;
+    }
     // 打开文件
     int fileFd = open(fileRealPath, O_RDONLY);
     if (fileFd < 0) {
@@ -830,12 +860,22 @@ void getsCommand(task_t *task) {
         responseLen = snprintf(response, sizeof(response), "file open error.");
         goto send_response;
     }
+    // 跳转到 offset 位置
+    if (clientOffset > 0) {
+        if (lseek(fileFd, clientOffset, SEEK_SET) != (off_t)clientOffset) {
+            log_error("Failed to seek to offset %u", clientOffset);
+            close(fileFd);
+            statusCode = STATUS_FAIL;
+            responseLen = snprintf(response, sizeof(response), "gets error: seek failed\n");
+            goto send_response;
+        }
+        log_info("Resuming download from offset: %u", clientOffset);
+    }
 
     char buff[SEND_FILE_BUFF_SIZE];
     uint32_t totalSend = 0;
 
-    // ✅ 使用原始文件大小进行循环比较
-    while (totalSend < originalFileSize) {
+    while (totalSend < dataToSend) {
         ssize_t bytesRead = read(fileFd, buff, sizeof(buff));
         if (bytesRead <= 0) {
             if (bytesRead < 0) {
@@ -860,23 +900,31 @@ void getsCommand(task_t *task) {
     close(fileFd);
 
     // 验证传输完整性
-    if (totalSend != originalFileSize) {
-        log_error("File transfer incomplete: %u/%u bytes", totalSend, originalFileSize);
+    if (totalSend != dataToSend) {
+        log_error("File transfer incomplete: %u/%u bytes", totalSend, dataToSend);
         statusCode = STATUS_FAIL;
         responseLen = snprintf(response, sizeof(response), "file transfer incomplete.");
         goto send_response;
     }
 
     // 成功发送文件
-    responseLen =
-        snprintf(response, sizeof(response), "file download successfully(%u bytes).\n", totalSend);
-
+    if (clientOffset > 0) {
+        responseLen =
+            snprintf(response, sizeof(response),
+                     "File resumed and downloaded successfully (%u bytes, from offset %u).\n",
+                     totalSend, clientOffset);
+    } else {
+        responseLen = snprintf(response, sizeof(response),
+                               "File download successfully (%u bytes).\n", totalSend);
+    }
 send_response:
     if (sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, responseLen) < 0) {
         log_error("gets: Failed to send response to client (fd=%d)", task->peerFd);
     } else {
         log_info("gets command completed: status=%d, file path=%s", statusCode, task->data);
     }
+    // addEpollReadFd(task->epFd, task->peerFd);
+    // log_info("gets: fd %d re-added to epoll", task->peerFd);
 }
 /**
  * @brief 校验用户密码，

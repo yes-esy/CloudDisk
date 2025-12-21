@@ -13,6 +13,7 @@ add_compile_options(
     -Wno-sign-compare
     -Wno-implicit-fallthrough
     -Wno-unused-result
+    -Wformat
 )
 
 # 导出compile_commands.json for IDE
@@ -52,6 +53,7 @@ set(SERVER_SRCS
     "${UTILS_SRC}/log.c"
     "${CONFIG_SRC}/config.c"
     "${LOGIN_SRC}/login.c"
+    "${UTILS_SRC}/tools.c"
 )
 
 # 生成服务器可执行文件
