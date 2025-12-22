@@ -84,7 +84,10 @@ int runArgsLoad(RunArgs *args, const char *configPath) {
     args->port = (const char *)find(args->ht, "port");
     args->logFile = (const char *)find(args->ht, "log_path");
     args->workFolder = (const char *)find(args->ht, "work_folder");
-
+    args->database = (const char *)find(args->ht, "database");
+    args->username = (const char *)find(args->ht, "username");
+    args->password = (const char *)find(args->ht, "password");
+    const char *connectionNumStr = (const char *)find(args->ht, "connection_num");
     if (!threadNumStr || !args->ip || !args->port) {
         fprintf(stderr, "config missing required keys: threadNum/ip/port\n");
         return -1;
@@ -93,6 +96,11 @@ int runArgsLoad(RunArgs *args, const char *configPath) {
     args->threadNum = atoi(threadNumStr);
     if (args->threadNum <= 0) {
         fprintf(stderr, "invalid threadNum: %s\n", threadNumStr);
+        return -1;
+    }
+    args->connectionNum = atoi(connectionNumStr);
+    if (args->connectionNum <= 0) {
+        fprintf(stderr, "invalid connectionNum: %s\n", connectionNumStr);
         return -1;
     }
 

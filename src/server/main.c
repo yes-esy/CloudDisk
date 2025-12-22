@@ -20,18 +20,18 @@
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include "list.h"
+#include "select.h"
 ListNode *userList = NULL;
-
+ConnectionPool_T pool = NULL;
 int main(int argc, char **argv) {
     ARGS_CHECK(argc, 2);
-
     RunArgs args;
     if (runArgsLoad(&args, argv[1]) != 0) {
         fprintf(stderr, "load config failed\n");
         runArgsFree(&args);
         return 1;
     }
-
+    initDatabaseConnection(&args);
     // 日志
     log_init(args.logFile, LOG_DEBUG);
     log_info("log init finish");

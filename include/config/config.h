@@ -15,9 +15,13 @@ typedef struct {
     const char *port;
     const char *logFile;
     const char *workFolder;
+    const char *username;
+    const char *password;
+    const char *database;
+    int connectionNum;
     HashTable *ht; // 配置哈希表(内部value为堆内存，destroyHashTable会free)
 } RunArgs;
 
 int runArgsLoad(RunArgs *args, const char *configPath);
-int readConfig(const char * path , HashTable * hashtable);
+int readConfig(const char *path, HashTable *hashtable);
 void runArgsFree(RunArgs *args);
