@@ -2,7 +2,7 @@
 extern ConnectionPool_T pool;
 URL_T url;
 int initDatabaseConnection(RunArgs *args) {
-    const char *connectionStr[128];
+    char connectionStr[128];
     snprintf(connectionStr, sizeof(connectionStr), "mysql://localhost/%s?user=%s&password=%s",
              args->database, args->username, args->password);
     url = URL_new(connectionStr);
@@ -10,11 +10,12 @@ int initDatabaseConnection(RunArgs *args) {
         printf("URL parse ERROR!\n");
         return 0;
     }
-    ConnectionPool_T pool = ConnectionPool_new(url);
+    pool = ConnectionPool_new(url);
     //设置初始化连接数目
     ConnectionPool_setInitialConnections(pool, args->connectionNum);
     //开启线程池
     ConnectionPool_start(pool);
+    return 1;
 }
 void DatabaseClose() {
     //将连接池与数据库分离
@@ -30,8 +31,8 @@ int selectUserInfo(user_info_t *user, char *response) {
     Connection_T con = ConnectionPool_getConnection(pool);
     char selectStr[SQL_LENGTH];
     snprintf(selectStr, sizeof(selectStr), "select encrypt,salt,pwd from t_user where username=%s",
-             selectStr);
-    ResultSet_T result = Connection_executeQuery(con, selectStr);
+             user->name);
+    ResultSet_T result = Connection_executeQuery(con, "%s", selectStr);
     if (!ResultSet_next(result)) {
         Connection_close(con);
         return -1;

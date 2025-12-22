@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-20 16:55:11
+ * @LastEditTime : 2025-12-22 22:34:15
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
  **/
 #include "net.h"
@@ -16,6 +16,44 @@
 #include "config.h"
 char username[USERNAME_LENGTH];
 char workforlder[PATH_MAX_LENGTH];
+void loginOrRegister(int sockfd) {
+    int choice;
+    printf("╔════════════════════════════════════════╗\n");
+    printf("║   Welcome to CloudDisk Client v0.2.0   ║\n");
+    printf("║   1. Login to CloudDisk.               ║\n");
+    printf("║   2. Register and login to CloudDisk.  ║\n");
+    printf("╚════════════════════════════════════════╝\n");
+    printf("\nPlease type your choice (1 or 2): ");
+    while (1) {
+        // 尝试读取整数
+        if (scanf("%d", &choice) != 1) {
+            // 输入不是整数，清空输入缓冲区
+            int c;
+            while ((c = getchar()) != '\n' && c != EOF)
+                ;
+            printf("\nInvalid input! Please type your choice (1 or 2)again:");
+            continue;
+        }
+
+        // 清除可能残留的输入（如 "1abc" 中的 "abc"）
+        int c;
+        while ((c = getchar()) != '\n' && c != EOF)
+            ;
+
+        switch (choice) {
+            case 1:
+                userLogin(sockfd);
+                return; // 成功选择后退出函数
+            case 2:
+                userRegister(sockfd);
+                userLogin(sockfd);
+                return;
+            default:
+                printf("\nInvalid input! Please type your choice (1 or 2)again:");
+                // 继续循环，重新显示菜单
+        }
+    }
+}
 int main(int argc, char **argv) {
     ARGS_CHECK(argc, 2);
 
@@ -32,7 +70,7 @@ int main(int argc, char **argv) {
     log_info("log init finish");
     int port = atoi(args.port);
     int clientFd = tcpConnect(args.ip, port);
-    userLogin(clientFd);
+    loginOrRegister(clientFd);
     char buf[1024] = {0};
     fd_set rdset;
     packet_t packet;

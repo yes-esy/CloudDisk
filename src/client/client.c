@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-21 22:58:58
+ * @LastEditTime : 2025-12-22 23:10:49
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "client.h"
@@ -20,7 +20,6 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
-
 
 extern char workforlder[PATH_MAX_LENGTH];
 /**
@@ -262,7 +261,7 @@ cleanup:
  * @param packet_p 输出参数:服务器响应包
  * @return 成功返回0
  */
-int sendUsername(int sockfd, packet_t *packet_p) {
+int sendLoginUsername(int sockfd, packet_t *packet_p) {
     packet_t packet;
     // 接收服务器响应
     char responseBuf[RESPONSE_LENGTH] = {0};
@@ -321,7 +320,7 @@ int sendUsername(int sockfd, packet_t *packet_p) {
  * @param packet_p 输出参数:服务器响应包
  * @return 成功返回0
  */
-int sendPassword(int sockfd, packet_t *packet_p) {
+int sendLoginPassword(int sockfd, packet_t *packet_p) {
     packet_t packet;
     int ret;
     // 接收服务器响应
@@ -376,7 +375,52 @@ int sendPassword(int sockfd, packet_t *packet_p) {
     }
     return 0;
 }
-
+/**
+ * @brief 用户注册
+ * @param sockfd 客户端fd
+ */
+void userRegister(int sockfd) {
+    char usernameInput[USERNAME_LENGTH];
+    char passwordInput[PASSWORD_LENGTH];
+    char againPasswordInput[PASSWORD_LENGTH];
+    int passwordValid = 0;
+    int usernameValid = 0;
+    packet_t usernamePacket;
+    packet_t passwordPacket;
+    while (0 == usernameValid) {
+        printf("please input a valid username(length >= 3):\n");
+        int ret = read(STDIN_FILENO, usernameInput, sizeof(usernameInput));
+        if (ret < 3) {
+            continue;
+        }
+        usernameInput[ret - 1] = '\0';
+        memset(&usernamePacket, 0, sizeof(packet_t));
+        strcpy(usernamePacket.buff, usernameInput);
+        usernamePacket.len = strlen(usernameInput);
+        usernamePacket.cmdType = TASK_REGISTER_USERNAME;
+        sendRequest(sockfd, &usernamePacket);
+    }
+    printf(USERNAME);
+    while (0 == passwordValid) {
+        printf("please input a valid password(length >= 8):\n");
+        int ret = read(STDIN_FILENO, passwordInput, sizeof(passwordInput));
+        passwordInput[ret - 1] = '\0';
+        if (ret < 8) {
+            continue;
+        }
+        printf("please input this password again:\n");
+        ret = read(STDIN_FILENO, againPasswordInput, sizeof(againPasswordInput));
+        if (strcmp(passwordInput, againPasswordInput) != 0) {
+            printf("The passwords entered twice were not the same.\n");
+            continue;
+        }
+        memset(&passwordPacket,0,sizeof(passwordPacket));
+        passwordPacket.cmdType = TASK_REGISTER_PASSWORD;
+        passwordPacket.len = strlen(passwordInput);
+        strcpy(passwordPacket.buff,passwordInput);
+        sendRequest(sockfd,&passwordPacket);
+    }
+}
 /**
  * @brief : 用户登录 
  * @param sockfd: 客户端socket
@@ -385,8 +429,8 @@ int sendPassword(int sockfd, packet_t *packet_p) {
 void userLogin(int sockfd) {
     int ret;
     packet_t packet;
-    sendUsername(sockfd, &packet);
-    sendPassword(sockfd, &packet);
+    sendLoginUsername(sockfd, &packet);
+    sendLoginPassword(sockfd, &packet);
 }
 /**
  * @brief 从处理后的参数中提取源文件路径和目标路径

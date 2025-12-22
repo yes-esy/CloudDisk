@@ -96,15 +96,15 @@ target_include_directories(CloudDiskClient PRIVATE
 )
 
 # 添加可执行文件
-# add_executable(test_zdb ${PROJECT_SOURCE_DIR}/test/test_zdb.c)
-# target_include_directories(test_zdb PRIVATE ${ZDB_INCLUDE_DIR})
-# # 链接库
-# target_link_libraries(test_zdb
-#     ${ZDB_LIBRARY}
-#     ${MYSQLCLIENT_LIB}
-#     pthread
-#     dl
-# )
+add_executable(test_zdb ${PROJECT_SOURCE_DIR}/test/test_zdb.c)
+target_include_directories(test_zdb PRIVATE ${ZDB_INCLUDE_DIR})
+# 链接库
+target_link_libraries(test_zdb
+    ${ZDB_LIBRARY}
+    ${MYSQLCLIENT_LIB}
+    pthread
+    dl
+)
 
 # 服务器链接库
 target_link_libraries(CloudDiskServer PRIVATE
