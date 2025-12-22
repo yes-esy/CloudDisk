@@ -107,6 +107,7 @@ typedef struct {
     char name[20];       //用户名(客户端传递过来的)
     char encrypted[100]; //从/etc/shadow文件中获取的加密密文
     char pwd[128];       //用户当前路径
+    char salt[128];      // 盐值
     time_t login_time;
 } user_info_t;
 

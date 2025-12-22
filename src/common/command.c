@@ -1113,7 +1113,7 @@ void userLoginVerifyUsername(task_t *task) {
             strcpy(user->name, task->data);
             int ret = selectUsername(user, response);
             if (0 == ret) {
-                log_info("Username '%s' found, sending salt", task->data);
+                log_info("Username '%s' found, sending salt:'%s'", task->data,response);
                 sendResponse(user->sockfd, STATUS_SUCCESS, DATA_TYPE_CIPHERTEXT, response,
                              strlen(response));
             } else {

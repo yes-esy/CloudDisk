@@ -26,6 +26,7 @@ set(COMMON_SRC "src/common")
 set(UTILS_SRC "src/utils")
 set(CONFIG_SRC "src/config")
 set(LOGIN_SRC "src/auth")
+set(SQL_SRC "src/sql")
 
 # 客户端源文件
 set(CLIENT_SRCS
@@ -54,6 +55,8 @@ set(SERVER_SRCS
     "${CONFIG_SRC}/config.c"
     "${LOGIN_SRC}/login.c"
     "${UTILS_SRC}/tools.c"
+    "${SQL_SRC}/select.c"
+
 )
 
 # 生成服务器可执行文件
@@ -62,6 +65,16 @@ add_executable(CloudDiskServer ${SERVER_SRCS})
 # 生成客户端可执行文件
 add_executable(CloudDiskClient ${CLIENT_SRCS})
 
+# 查找线程库
+find_package(Threads REQUIRED)
+find_package(OpenSSL REQUIRED)
+
+
+# 查找 MySQL 客户端库
+find_library(MYSQLCLIENT_LIB mysqlclient REQUIRED)
+find_path(MYSQL_INCLUDE_DIR mysql.h PATH_SUFFIXES mysql)
+set(ZDB_INCLUDE_DIR /usr/local/include/zdb)
+set(ZDB_LIBRARY /usr/local/lib/libzdb.so) # 或 libzdb.a
 # 服务器包含目录
 target_include_directories(CloudDiskServer PRIVATE
     ${PROJECT_SOURCE_DIR}/include/common
@@ -69,6 +82,8 @@ target_include_directories(CloudDiskServer PRIVATE
     ${PROJECT_SOURCE_DIR}/include/utils
     ${PROJECT_SOURCE_DIR}/include/config
     ${PROJECT_SOURCE_DIR}/include/auth
+    ${ZDB_INCLUDE_DIR}
+    ${PROJECT_SOURCE_DIR}/include/sql
 )
 
 # 客户端包含目录
@@ -80,15 +95,25 @@ target_include_directories(CloudDiskClient PRIVATE
     ${PROJECT_SOURCE_DIR}/include/auth
 )
 
-# 查找线程库
-find_package(Threads REQUIRED)
-find_package(OpenSSL REQUIRED)
+# 添加可执行文件
+# add_executable(test_zdb ${PROJECT_SOURCE_DIR}/test/test_zdb.c)
+# target_include_directories(test_zdb PRIVATE ${ZDB_INCLUDE_DIR})
+# # 链接库
+# target_link_libraries(test_zdb
+#     ${ZDB_LIBRARY}
+#     ${MYSQLCLIENT_LIB}
+#     pthread
+#     dl
+# )
 
 # 服务器链接库
 target_link_libraries(CloudDiskServer PRIVATE
     Threads::Threads
     crypt
     OpenSSL::SSL
+    ${ZDB_LIBRARY}
+    ${MYSQLCLIENT_LIB}
+    dl
 )
 
 # 客户端链接库
