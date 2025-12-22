@@ -28,6 +28,7 @@
 #define ARGS_LENGTH 256
 #define FILE_BUFF_SIZE 1024
 #define USERNAME_LENGTH 32
+#define PASSWORD_LENGTH 32
 #define USERNAME "please input a valid user name:\n"
 #define PASSWORD "please input the right password:\n"
 #define MMAP_THRESHOLD (100 * 1024 * 1024) // 100MB
@@ -45,6 +46,8 @@ typedef enum {
     CMD_TYPE_CHECK_PARTIAL,
     TASK_LOGIN_VERIFY_USERNAME = 100,
     TASK_LOGIN_VERIFY_PASSWORD,
+    TASK_REGISTER_USERNAME,
+    TASK_REGISTER_PASSWORD,
 } CmdType;
 
 /**
