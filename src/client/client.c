@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-22 23:10:49
+ * @LastEditTime : 2025-12-23 23:59:14
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "client.h"
@@ -323,24 +323,42 @@ int sendLoginUsername(int sockfd, packet_t *packet_p) {
 int sendLoginPassword(int sockfd, packet_t *packet_p) {
     packet_t packet;
     int ret;
-    // 接收服务器响应
     char responseBuf[RESPONSE_LENGTH] = {0};
     ResponseStatus statusCode;
     DataType dataType;
+
     while (1) {
         char *password = getpass(PASSWORD);
-        char *encrytped = crypt(password, packet_p->buff);
-        packet.len = strlen(encrytped);
+
+        unsigned char salt_bin[16]; // SALT_LEN = 16
+        if (hex_to_bin(packet_p->buff, salt_bin, sizeof(salt_bin)) != 0) {
+            log_error("Failed to parse salt from server");
+            continue;
+        }
+
+        char hash_hex[KEY_LEN * 2 + 1];
+        if (derive_password_with_salt(password, salt_bin, sizeof(salt_bin), hash_hex,
+                                      sizeof(hash_hex))
+            != 0) {
+            log_error("Failed to derive password hash");
+            continue;
+        }
+
+        // 发送密文
+        packet.len = strlen(hash_hex);
         packet.cmdType = TASK_LOGIN_VERIFY_PASSWORD;
-        strncpy(packet.buff, encrytped, packet.len);
+        strncpy(packet.buff, hash_hex, sizeof(packet.buff) - 1);
+
         ret = sendRequest(sockfd, &packet);
         if (ret <= 0) {
             printf("unknown error,try again\n");
-            log_error("Failed to send username");
+            log_error("Failed to send password");
             continue;
         }
-        log_info("send password ciphertext : %s", encrytped);
+
+        log_info("send password hash: %s", hash_hex);
         log_debug("Waiting for password verification...");
+
         ret = recvResponse(sockfd, responseBuf, sizeof(responseBuf), &statusCode, &dataType);
         if (ret < 0) {
             log_error("Failed to receive response");
@@ -355,26 +373,27 @@ int sendLoginPassword(int sockfd, packet_t *packet_p) {
             printf("%s", responseBuf);
             continue;
         }
-        printf("%s", responseBuf); // "Login successful! Welcome, yes\n"
 
-        // ✅ 第二次接收: 当前工作目录
-        memset(workforlder, 0, sizeof(workforlder)); // 清空缓冲区
+        printf("%s", responseBuf);
+
+        // 接收当前工作目录
+        memset(workforlder, 0, sizeof(workforlder));
         ret = recvResponse(sockfd, workforlder, sizeof(workforlder), &statusCode, &dataType);
 
         if (ret < 0) {
             log_error("Failed to receive current directory");
             return -1;
         }
-
         if (ret == 0) {
             log_error("Server closed connection while receiving directory");
             return -1;
         }
+
         log_info("Login successful, current directory: %s", workforlder);
         break;
     }
     return 0;
-}
+} 
 /**
  * @brief 用户注册
  * @param sockfd 客户端fd
@@ -387,38 +406,81 @@ void userRegister(int sockfd) {
     int usernameValid = 0;
     packet_t usernamePacket;
     packet_t passwordPacket;
-    while (0 == usernameValid) {
+
+    while (!usernameValid) {
         printf("please input a valid username(length >= 3):\n");
         int ret = read(STDIN_FILENO, usernameInput, sizeof(usernameInput));
-        if (ret < 3) {
+        if (ret <= 1)
+            continue;
+        usernameInput[ret - 1] = '\0';
+
+        memset(&usernamePacket, 0, sizeof(usernamePacket));
+        strncpy(usernamePacket.buff, usernameInput, sizeof(usernamePacket.buff) - 1);
+        usernamePacket.len = (uint32_t)strlen(usernamePacket.buff);
+        usernamePacket.cmdType = TASK_REGISTER_USERNAME;
+
+        if (sendRequest(sockfd, &usernamePacket) <= 0) {
+            printf("send error, try again\n");
             continue;
         }
-        usernameInput[ret - 1] = '\0';
-        memset(&usernamePacket, 0, sizeof(packet_t));
-        strcpy(usernamePacket.buff, usernameInput);
-        usernamePacket.len = strlen(usernameInput);
-        usernamePacket.cmdType = TASK_REGISTER_USERNAME;
-        sendRequest(sockfd, &usernamePacket);
+
+        char response[RESPONSE_LENGTH] = {0};
+        ResponseStatus status;
+        DataType dataType;
+        int r = recvResponse(sockfd, response, sizeof(response), &status, &dataType);
+        if (r <= 0) {
+            printf("recv error or server closed\n");
+            continue;
+        }
+        printf("%s", response);
+        if (status == STATUS_SUCCESS) {
+            usernameValid = 1;
+            break;
+        }
     }
-    printf(USERNAME);
-    while (0 == passwordValid) {
+    while (!passwordValid) {
         printf("please input a valid password(length >= 8):\n");
         int ret = read(STDIN_FILENO, passwordInput, sizeof(passwordInput));
-        passwordInput[ret - 1] = '\0';
-        if (ret < 8) {
+        if (ret <= 1)
             continue;
-        }
+        passwordInput[ret - 1] = '\0';
+        if ((int)strlen(passwordInput) < 8)
+            continue;
+
         printf("please input this password again:\n");
         ret = read(STDIN_FILENO, againPasswordInput, sizeof(againPasswordInput));
+        if (ret <= 1)
+            continue;
+        againPasswordInput[ret - 1] = '\0';
         if (strcmp(passwordInput, againPasswordInput) != 0) {
             printf("The passwords entered twice were not the same.\n");
             continue;
         }
-        memset(&passwordPacket,0,sizeof(passwordPacket));
+
+        memset(&passwordPacket, 0, sizeof(passwordPacket));
         passwordPacket.cmdType = TASK_REGISTER_PASSWORD;
-        passwordPacket.len = strlen(passwordInput);
-        strcpy(passwordPacket.buff,passwordInput);
-        sendRequest(sockfd,&passwordPacket);
+        snprintf(passwordPacket.buff, sizeof(passwordPacket.buff), "%s\n%s", usernameInput,
+                 passwordInput);
+        passwordPacket.len = (uint32_t)strlen(passwordPacket.buff);
+
+        if (sendRequest(sockfd, &passwordPacket) <= 0) {
+            printf("send error, try again\n");
+            continue;
+        }
+
+        char response[RESPONSE_LENGTH] = {0};
+        ResponseStatus status;
+        DataType dataType;
+        int r = recvResponse(sockfd, response, sizeof(response), &status, &dataType);
+        if (r <= 0) {
+            printf("recv error or server closed\n");
+            continue;
+        }
+        printf("%s", response);
+        if (status == STATUS_SUCCESS) {
+            passwordValid = 1;
+            break;
+        }
     }
 }
 /**

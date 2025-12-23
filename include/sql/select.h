@@ -10,8 +10,15 @@
 #include <zdb/URL.h>
 #include "config.h"
 #include "types.h"
-#define SQL_LENGTH 1024
+#include <openssl/rand.h>
+#include <openssl/evp.h>
+#define SQL_LENGTH 512
+#define SALT_LEN 16
+#define KEY_LEN 32
+#define PBKDF2_ITER 10000
 int initDatabaseConnection(RunArgs *args);
 // 查询用户
-int selectUser(user_info_t *user, char *response);
+int selectUsernameUnique(const char *username);
 void DatabaseClose();
+int insertUser(const char *username, const char *password);
+int selectUserInfo(user_info_t *user, char *response);

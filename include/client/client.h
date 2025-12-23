@@ -141,6 +141,7 @@ static uint32_t getLocalPartialFileSize(const char *filepath) {
  * @return void
 **/
 void userLogin(int sockfd);
+void userRegister(int sockfd);
 /**
  * @brief 发送请求给服务器
  * @param clientFd 客户端socket

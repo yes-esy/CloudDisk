@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-21 23:00:00
+ * @LastEditTime : 2025-12-23 23:46:18
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "command.h"
@@ -23,6 +23,7 @@
 #include "list.h"
 #include "login.h"
 #include "tools.h"
+#include "select.h"
 #include <sys/mman.h>
 extern ListNode *userList;
 static char currentVirtualPath[PATH_MAX_LENGTH] = "/";
@@ -1111,9 +1112,9 @@ void userLoginVerifyUsername(task_t *task) {
         if (user->sockfd == task->peerFd) {
             found = 1;
             strcpy(user->name, task->data);
-            int ret = selectUsername(user, response);
+            int ret = selectUserInfo(user, response);
             if (0 == ret) {
-                log_info("Username '%s' found, sending salt:'%s'", task->data,response);
+                log_info("Username '%s' found, sending salt:'%s'", task->data, response);
                 sendResponse(user->sockfd, STATUS_SUCCESS, DATA_TYPE_CIPHERTEXT, response,
                              strlen(response));
             } else {
@@ -1188,6 +1189,42 @@ void userLoginVerifyPassword(task_t *task) {
         sendResponse(task->peerFd, STATUS_FAIL, DATA_TYPE_TEXT, response, responseLen);
     }
 }
+
+void userRegisterVerifyUsername(task_t *task) {
+    char response[RESPONSE_BUFF_SIZE];
+    int responseLen = 0;
+    ResponseStatus status;
+    int ret = selectUsernameUnique(task->data);
+    if (ret == 0) {
+        responseLen = snprintf(response, sizeof(response), "username is valid.\n");
+        status = STATUS_SUCCESS;
+    } else {
+        status = STATUS_INVALID_PARAM;
+        responseLen = snprintf(response, sizeof(response), "username is invalid.\n");
+    }
+    sendResponse(task->peerFd, status, DATA_TYPE_TEXT, response, responseLen);
+}
+void userRegisterVerifyPassword(task_t *task) {
+    char response[RESPONSE_BUFF_SIZE];
+    int responseLen = 0;
+    ResponseStatus status = STATUS_SUCCESS;
+    char username[USERNAME_LENGTH];
+    char password[PASSWORD_LENGTH];
+    if (sscanf(task->data, "%s\n%s", username, password) < 0) {
+        status = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "register failed,parse error");
+    }
+    log_info("register username=%s,password=%s", username, password);
+    int ret = insertUser(username, password);
+    if (ret < 0) {
+        status = STATUS_FAIL;
+        responseLen =
+            snprintf(response, sizeof(response), "register failed,insert into table error.");
+    } else {
+        responseLen = snprintf(response, sizeof(response), "register successfully,please login");
+    }
+    sendResponse(task->peerFd, status, DATA_TYPE_TEXT, response, responseLen);
+}
 /**
  * @brief        : 执行命令
  * @param         {task_t} *task: 对应的任务
@@ -1221,6 +1258,12 @@ void executeCmd(task_t *task) {
             break;
         case CMD_TYPE_CHECK_PARTIAL:
             checkPartialFile(task);
+            break;
+        case TASK_REGISTER_USERNAME:
+            userRegisterVerifyUsername(task);
+            break;
+        case TASK_REGISTER_PASSWORD:
+            userRegisterVerifyPassword(task);
             break;
         case TASK_LOGIN_VERIFY_USERNAME:
             userLoginVerifyUsername(task);
