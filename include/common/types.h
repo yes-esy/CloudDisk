@@ -21,7 +21,7 @@
 #define VIRTUAL_ROOT "/"
 #define RESPONSE_LENGTH 4096
 #define RESPONSE_BUFF_SIZE 4096
-#define FILENAME_LENGTH 30
+#define FILENAME_LENGTH 255
 #define RECEIVE_FILE_BUFF_SIZE 1024
 #define SEND_FILE_BUFF_SIZE 1024
 #define MAX_FILE_SIZE (1024UL * 1024UL * 1024UL) /* 1 GiB */
@@ -29,6 +29,7 @@
 #define FILE_BUFF_SIZE 1024
 #define USERNAME_LENGTH 32
 #define PASSWORD_LENGTH 32
+#define FILE_MAX_CNT 1024
 #define USERNAME "please input a valid user name:\n"
 #define PASSWORD "please input the right password:\n"
 #define MMAP_THRESHOLD (100 * 1024 * 1024) // 100MB
@@ -111,7 +112,9 @@ typedef struct {
     char encrypted[100]; //从/etc/shadow文件中获取的加密密文
     char pwd[128];       //用户当前路径
     char salt[128];      // 盐值
-    time_t login_time;
+    time_t login_time;   // 登入时间
+    int current_dir_id;  // 当前工作目录的id
+    int user_id;         // 用户id
 } user_info_t;
 
 // 新增传输模式枚举

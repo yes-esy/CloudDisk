@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-13 21:17:36
+ * @LastEditTime : 2025-12-24 23:19:04
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "list.h"
@@ -52,7 +52,7 @@ void appendNode(ListNode **head, void *val) {
 **/
 void deleteNode(ListNode **head, void *target) {
     if (NULL == *head) {
-        return ;
+        return;
     }
     if ((*head)->val == target) {
         ListNode *temp = *head;

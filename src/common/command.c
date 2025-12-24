@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-23 23:46:18
+ * @LastEditTime : 2025-12-24 23:31:24
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "command.h"
@@ -27,6 +27,27 @@
 #include <sys/mman.h>
 extern ListNode *userList;
 static char currentVirtualPath[PATH_MAX_LENGTH] = "/";
+
+/**
+ * @brief 获取链表中的一个节点
+ * @param val 指定节点对应的值 
+ * @param head 链表头指针
+ * @return 指定节点指针或NULL
+ */
+user_info_t *getListUser(int sockfd) {
+    /**
+     * user_info_t *user = (user_info_t *)pNode->val;
+     */
+    ListNode *cur = userList;
+    while (cur) {
+        user_info_t *user = (user_info_t *)cur->val;
+        if (user->sockfd == sockfd) {
+            return user;
+        }
+        cur = cur->next;
+    }
+    return NULL;
+}
 /**
  * @brief 发送响应给客户端
  */
@@ -124,6 +145,123 @@ void pwdCommand(task_t *task) {
         log_error("pwd: Failed to send response to client (fd=%d)", task->peerFd);
     } else {
         log_info("pwd command completed: status=%d, path=%s", statusCode, currentVirtualPath);
+    }
+}
+/**
+ * @brief 列出目录内容命令(数据库版本)
+ */
+void lsCommandVitrual(task_t *task) {
+    log_info("Executing ls command (virtual, fd=%d)", task->peerFd);
+
+    // 1. 获取用户信息
+    user_info_t *user = getListUser(task->peerFd);
+    if (NULL == user) {
+        log_error("User not logged in (fd=%d)", task->peerFd);
+        const char *errorMsg = "Error: Please login first\n";
+        sendResponse(task->peerFd, STATUS_FAIL, DATA_TYPE_TEXT, errorMsg, strlen(errorMsg));
+        return;
+    }
+
+    ResponseStatus statusCode = STATUS_SUCCESS;
+    char response[RESPONSE_LENGTH] = {0};
+    size_t offset = 0;
+    int count = 0;
+
+    // 2. 从数据库获取文件列表
+    file_t files[FILE_MAX_CNT];
+    int fileCount = listFiles(user, files, FILE_MAX_CNT);
+
+    if (fileCount < 0) {
+        log_error("Failed to list files from database (fd=%d)", task->peerFd);
+        statusCode = STATUS_FAIL;
+        offset = snprintf(response, sizeof(response), "ls error: database query failed\n");
+        goto send_response;
+    }
+
+    log_info("Retrieved %d files from database", fileCount);
+
+    // 3. 添加表头
+    int written = snprintf(response + offset, sizeof(response) - offset, "%-6s  %12s  %-16s  %s\n",
+                           "Type", "Size", "Modified", "Name");
+    if (written > 0 && offset + written < sizeof(response)) {
+        offset += written;
+        written = snprintf(response + offset, sizeof(response) - offset, "%-6s  %12s  %-16s  %s\n",
+                           "------", "------------", "----------------", "--------------------");
+        if (written > 0 && offset + written < sizeof(response)) {
+            offset += written;
+        }
+    }
+
+    // 4. 遍历文件列表并格式化输出
+    for (int i = 0; i < fileCount; i++) {
+        file_t *file = &files[i];
+
+        // 确定文件类型
+        const char *typeStr;
+        char fileName[FILE_NAME_MAX_LEN + 2]; // +2 for potential '/' suffix
+
+        if (file->type == 0) { // 假设 0 表示目录
+            typeStr = "<DIR>";
+            snprintf(fileName, sizeof(fileName), "%s/", file->filename);
+        } else { // 1 表示普通文件
+            typeStr = "FILE";
+            strncpy(fileName, file->filename, sizeof(fileName) - 1);
+            fileName[sizeof(fileName) - 1] = '\0';
+        }
+
+        // 格式化文件大小
+        char sizeStr[13];
+        if (file->type == 0) { // 目录
+            snprintf(sizeStr, sizeof(sizeStr), "-");
+        } else if (file->file_size < 1024) {
+            snprintf(sizeStr, sizeof(sizeStr), "%lu B", (unsigned long)file->file_size);
+        } else if (file->file_size < 1024 * 1024) {
+            snprintf(sizeStr, sizeof(sizeStr), "%.1f KB", file->file_size / 1024.0);
+        } else if (file->file_size < 1024ULL * 1024 * 1024) {
+            snprintf(sizeStr, sizeof(sizeStr), "%.1f MB", file->file_size / (1024.0 * 1024.0));
+        } else {
+            snprintf(sizeStr, sizeof(sizeStr), "%.1f GB",
+                     file->file_size / (1024.0 * 1024.0 * 1024.0));
+        }
+
+        // 格式化更新时间
+        char timeStr[17];
+        struct tm *tm_info = localtime(&file->update_time);
+        strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M", tm_info);
+
+        // 添加到响应缓冲区
+        written = snprintf(response + offset, sizeof(response) - offset, "%-6s  %12s  %-16s  %s\n",
+                           typeStr, sizeStr, timeStr, fileName);
+
+        if (written > 0 && offset + written < sizeof(response)) {
+            offset += written;
+            count++;
+        } else {
+            log_warn("Response buffer full, truncating at %d items", count);
+            break;
+        }
+    }
+
+    // 5. 添加汇总信息
+    if (count == 0) {
+        offset = snprintf(response, sizeof(response), "Empty directory\n");
+        log_debug("Directory is empty");
+    } else {
+        if (offset + 30 < sizeof(response)) {
+            written = snprintf(response + offset, sizeof(response) - offset,
+                               "\nTotal: %d item(s)\n", count);
+            if (written > 0) {
+                offset += written;
+            }
+        }
+        log_debug("Listed %d items from directory", count);
+    }
+
+send_response:
+    if (sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, offset) < 0) {
+        log_error("ls: Failed to send response to client (fd=%d)", task->peerFd);
+    } else {
+        log_info("ls command completed: status=%d, items=%d, bytes=%zu", statusCode, count, offset);
     }
 }
 /**
@@ -1098,6 +1236,16 @@ send_response:
     // log_info("gets: fd %d re-added to epoll", task->peerFd);
 }
 /**
+ * @brief 用户成功登入初始化
+ * @param user 登入的用户
+ */
+void userSuccessLoginInit(user_info_t *user) {
+    user->status = STATUS_LOGIN;
+    strcpy(user->pwd, "/");
+    user->login_time = time(NULL);
+    user->current_dir_id = 0;
+}
+/**
  * @brief 校验用户密码，
  * @param task 对应的线程
  */
@@ -1150,6 +1298,7 @@ void userLoginVerifyPassword(task_t *task) {
         if (user->sockfd == task->peerFd) {
             found = 1;
             if (strcmp(task->data, user->encrypted) == 0) {
+                userSuccessLoginInit(user);
                 user->status = STATUS_LOGIN;
                 strcpy(user->pwd, "/");
                 user->login_time = time(NULL);
@@ -1239,7 +1388,8 @@ void executeCmd(task_t *task) {
             cdCommand(task);
             break;
         case CMD_TYPE_LS:
-            lsCommand(task);
+            // lsCommand(task);
+            lsCommandVitrual(task);
             break;
         case CMD_TYPE_MKDIR:
             mkdirCommand(task);

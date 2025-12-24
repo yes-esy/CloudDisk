@@ -12,8 +12,8 @@
  * @brief 链表节点结构
  */
 typedef struct ListNode {
-    void *val;                   /* 节点的值 */
-    struct ListNode *next;       /* 指向下一个节点的指针 */
+    void *val;             /* 节点的值 */
+    struct ListNode *next; /* 指向下一个节点的指针 */
 } ListNode;
 
 /**
