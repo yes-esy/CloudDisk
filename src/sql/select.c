@@ -41,6 +41,10 @@ int derive_password_and_salt(const char *password, char *salt_hex_out, size_t sa
 
 extern ConnectionPool_T pool;
 URL_T url;
+/**
+ * @brief 初始化数据库链接
+ * @param args 程序运行参数
+ */
 int initDatabaseConnection(RunArgs *args) {
     char connectionStr[128];
     snprintf(connectionStr, sizeof(connectionStr), "mysql://localhost/%s?user=%s&password=%s",
@@ -57,6 +61,9 @@ int initDatabaseConnection(RunArgs *args) {
     ConnectionPool_start(pool);
     return 1;
 }
+/**
+ * @brief 关闭数据库连接
+ */
 void DatabaseClose() {
     //将连接池与数据库分离
     ConnectionPool_stop(pool);
@@ -87,7 +94,10 @@ int selectUserInfo(user_info_t *user, char *response) {
     Connection_close(con);
     return 0;
 }
-
+/**
+ * @brief 判断某一用户名是否唯一
+ * @param usernme 带判断的用户名
+ */
 int selectUsernameUnique(const char *username) {
     Connection_T con = ConnectionPool_getConnection(pool);
     ResultSet_T result =
@@ -99,7 +109,11 @@ int selectUsernameUnique(const char *username) {
     Connection_close(con);
     return ret;
 }
-
+/**
+ * @brief 插入一个用户
+ * @param username 用户名
+ * @param password 明文密码
+ */
 int insertUser(const char *username, const char *password) {
     int ret = -1;
     Connection_T con = ConnectionPool_getConnection(pool);
@@ -131,3 +145,5 @@ int insertUser(const char *username, const char *password) {
     Connection_close(con);
     return ret;
 }
+
+int insertDirectory(user_info_t user,const char * filename,)
