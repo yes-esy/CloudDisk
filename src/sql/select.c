@@ -1,5 +1,8 @@
 #include "select.h"
 #include <log.h>
+
+extern ConnectionPool_T pool;
+URL_T url;
 /*
  *  derive_password_and_salt
  *  使用 OpenSSL 生成随机 salt 并用 PBKDF2-HMAC-SHA256 派生密文。
@@ -38,9 +41,6 @@ int derive_password_and_salt(const char *password, char *salt_hex_out, size_t sa
 
     return 0;
 }
-
-extern ConnectionPool_T pool;
-URL_T url;
 /**
  * @brief 初始化数据库链接
  * @param args 程序运行参数
@@ -110,6 +110,32 @@ int selectUsernameUnique(const char *username) {
     return ret;
 }
 /**
+ * @brief 用户注册后初始化virtual file table
+ * @param userId 用户id
+ */
+int initUserVirtualTable(int userId) {
+    if (userId < 0) {
+        log_error("invalid user id,please check.");
+        return -1;
+    }
+    file_t file;
+    memset(&file, 0, sizeof(file_t));
+    file.owner_id = (uint32_t)userId;
+    strcpy(file.filename, "/");
+    // 显式初始化 md5 为空字符串，防止 SQL 读取垃圾值
+    strcpy(file.md5, "");
+    file.file_size = 4096;
+    file.is_deleted = 0;
+    file.parent_id = 0;
+    file.type = 2;
+    int ret = insertFile(&file);
+    if (ret != 0) {
+        log_error("initialize user virtual table failed (insertFile returned %d).", ret);
+        return -1; // 插入失败，返回 -1
+    }
+    return (int)file.id;
+}
+/**
  * @brief 插入一个用户
  * @param username 用户名
  * @param password 明文密码
@@ -138,7 +164,7 @@ int insertUser(const char *username, const char *password) {
 
     ResultSet_T result = Connection_executeQuery(con, "%s", insertStr);
     if (result) {
-        ret = 0;
+        ret = Connection_lastRowId(con);
         log_info("execute sql %s successfully", insertStr);
     }
 
@@ -195,10 +221,6 @@ int insertFile(file_t *file) {
     Connection_close(con);
     return ret;
 }
-
-#include <string.h>
-#include <stdio.h>
-
 /**
  * @brief 根据文件ID查询文件信息
  * @param file 文件结构体指针，调用前需填入 file->id
@@ -275,7 +297,6 @@ int selectFileById(file_t *file) {
     Connection_close(con);
     return ret;
 }
-
 /**
  * @brief 根据MD5查询文件是否存在（用于秒传）
  * @param file 文件结构体指针，调用前需填入 file->md5
@@ -334,7 +355,6 @@ int listFiles(user_info_t *user, file_t *files, int max_files) {
     // 1. 直接使用 user 中缓存的 ID，不需要再去解析路径字符串
     // 如果是根目录，current_dir_id 通常为 0 或 1
     int parent_id = user->current_dir_id;
-
     Connection_T con = ConnectionPool_getConnection(pool);
     if (!con)
         return -1;
@@ -359,24 +379,18 @@ int listFiles(user_info_t *user, file_t *files, int max_files) {
         while (ResultSet_next(result)) {
             if (count >= max_files)
                 break;
-
             file_t *f = &files[count];
             f->id = (uint32_t)ResultSet_getInt(result, 1);
             f->parent_id = (uint32_t)ResultSet_getInt(result, 2);
-
             const char *fname = ResultSet_getString(result, 3);
             if (fname)
                 snprintf(f->filename, sizeof(f->filename), "%s", fname);
-
             f->owner_id = (uint32_t)ResultSet_getInt(result, 4);
-
             const char *md5 = ResultSet_getString(result, 5);
             if (md5)
                 snprintf(f->md5, sizeof(f->md5), "%s", md5);
-
             f->file_size = (uint64_t)ResultSet_getLLong(result, 6);
             f->type = (uint8_t)ResultSet_getInt(result, 7);
-
             count++;
         }
     }
@@ -386,6 +400,147 @@ int listFiles(user_info_t *user, file_t *files, int max_files) {
     }
     END_TRY;
     Connection_close(con);
-
     return count;
+}
+/**
+ * @brief 解析路径字符串，获取目标目录的 ID
+ * @param user 用户信息结构体指针
+ * @param path_str 用户输入的路径
+ * @return 成功返回目标目录 ID，失败返回 -1
+ */
+int getDirectoryId(user_info_t *user, char *path_str) {
+    // 1. 参数检查
+    if (!user || !path_str)
+        return -1;
+    Connection_T con = ConnectionPool_getConnection(pool);
+    if (!con)
+        return -1;
+    // 2. 复制路径字符串
+    char *path_copy = strdup(path_str);
+    if (!path_copy) {
+        Connection_close(con);
+        return -1;
+    }
+    uint32_t target_id = user->current_dir_id;
+    char *token;
+    const char *delim = "/";
+    // 3. 判断绝对路径
+    if (path_str[0] == '/') {
+        target_id = 0; // 回到根目录 ID
+    }
+    token = strtok(path_copy, delim);
+    while (token != NULL) {
+        // 处理 "."
+        if (strcmp(token, ".") == 0) {
+            token = strtok(NULL, delim);
+            continue;
+        }
+        // 处理 ".."
+        if (strcmp(token, "..") == 0) {
+            // 优化：如果在根目录，直接跳过查询
+            if (target_id != 0) {
+                ResultSet_T rs =
+                    Connection_executeQuery(con,
+                                            "SELECT parent_id "
+                                            "FROM virtual_fs "
+                                            "WHERE id = %u AND type = 2 AND owner_id = %d",
+                                            target_id, user->user_id);
+                if (rs && ResultSet_next(rs)) {
+                    target_id = (uint32_t)ResultSet_getInt(rs, 1);
+                }
+            }
+            token = strtok(NULL, delim);
+            continue;
+        }
+        // 4. 处理普通目录名
+        ResultSet_T rs = Connection_executeQuery(
+            con,
+            "SELECT id "
+            "FROM virtual_fs "
+            "WHERE parent_id = %u AND filename = '%s' AND type = 2 AND owner_id = %d",
+            target_id, token, user->user_id);
+
+        int found = 0;
+        if (rs) {
+            if (ResultSet_next(rs)) {
+                target_id = (uint32_t)ResultSet_getInt(rs, 1);
+                found = 1;
+            }
+        }
+        if (!found) {
+            log_error("Path component not found: %s (parent_id=%u)", token, target_id);
+            free(path_copy);
+            Connection_close(con); // 别忘了关闭连接
+            return -1;
+        }
+        token = strtok(NULL, delim);
+    }
+
+    free(path_copy);
+    Connection_close(con);
+    // 返回最终的 ID
+    return (int)target_id;
+}
+/**
+ * @brief 查询路径，不存在则插入
+ * @param user 操作的用户
+ * @param path 解析后的路径数组
+ * @param con 数据库连接对象
+ * @return 成功返回目标目录ID，失败返回 -1
+ */
+int resolveOrCreateDirectory(user_info_t *user, const char **path) {
+    if (!user || !path) {
+        return -1;
+    }
+    int targetDirectId = -1;
+    // 1. 确定起始目录 ID
+    if (strcmp(path[0], ".")) {
+        targetDirectId = user->current_dir_id;
+    } else if (strcmp(path[0], "/")) {
+        targetDirectId = ROOT_ID;
+    } else {
+        // 路径解析逻辑错误，理应只有 "." 或 "/" 开头，或者这里做兼容处理
+        return -1;
+    }
+    int idx = 1;
+    Connection_T con = ConnectionPool_getConnection(pool);
+    while (path[idx] != NULL) {
+        ResultSet_T selectRes =
+            Connection_executeQuery(con,
+                                    "SELECT id FROM virtual_fs "
+                                    "WHERE parent_id = %d "
+                                    "AND owner_id = %u  "
+                                    "AND type = 2 "
+                                    "AND filename = '%s'",
+                                    targetDirectId, (unsigned int)user->user_id, path[idx]);
+
+        if (ResultSet_next(selectRes)) {
+            // 目录存在，获取 ID 并进入下一层
+            targetDirectId = (int)ResultSet_getInt(selectRes, 1);
+        } else {
+            // 目录不存在，插入新目录
+            // 注意：这里假设 Connection_execute 失败会抛出异常或至少我们能拿到 LastRowId
+            // 建议增加 try-catch (如果 libzdb 开启了异常模式) 或检查返回值
+            TRY {
+                Connection_execute(
+                    con,
+                    "INSERT INTO virtual_fs(parent_id, filename, owner_id, md5, file_size, type) "
+                    "VALUES(%u, '%s', %u, '%s', %llu, 2)",
+                    (unsigned int)targetDirectId, path[idx], (unsigned int)user->user_id,
+                    " ",                     // md5 占位
+                    (unsigned long long)4096 // 默认大小
+                );
+                // 获取刚插入行的 ID
+                targetDirectId = (int)Connection_lastRowId(con);
+            }
+            CATCH(SQLException) {
+                log_error("insert error:%s", SQLException.name);
+                return -1;
+            }
+            END_TRY;
+        }
+        idx++;
+    }
+
+    return targetDirectId;
 }

@@ -148,123 +148,6 @@ void pwdCommand(task_t *task) {
     }
 }
 /**
- * @brief 列出目录内容命令(数据库版本)
- */
-void lsCommandVitrual(task_t *task) {
-    log_info("Executing ls command (virtual, fd=%d)", task->peerFd);
-
-    // 1. 获取用户信息
-    user_info_t *user = getListUser(task->peerFd);
-    if (NULL == user) {
-        log_error("User not logged in (fd=%d)", task->peerFd);
-        const char *errorMsg = "Error: Please login first\n";
-        sendResponse(task->peerFd, STATUS_FAIL, DATA_TYPE_TEXT, errorMsg, strlen(errorMsg));
-        return;
-    }
-
-    ResponseStatus statusCode = STATUS_SUCCESS;
-    char response[RESPONSE_LENGTH] = {0};
-    size_t offset = 0;
-    int count = 0;
-
-    // 2. 从数据库获取文件列表
-    file_t files[FILE_MAX_CNT];
-    int fileCount = listFiles(user, files, FILE_MAX_CNT);
-
-    if (fileCount < 0) {
-        log_error("Failed to list files from database (fd=%d)", task->peerFd);
-        statusCode = STATUS_FAIL;
-        offset = snprintf(response, sizeof(response), "ls error: database query failed\n");
-        goto send_response;
-    }
-
-    log_info("Retrieved %d files from database", fileCount);
-
-    // 3. 添加表头
-    int written = snprintf(response + offset, sizeof(response) - offset, "%-6s  %12s  %-16s  %s\n",
-                           "Type", "Size", "Modified", "Name");
-    if (written > 0 && offset + written < sizeof(response)) {
-        offset += written;
-        written = snprintf(response + offset, sizeof(response) - offset, "%-6s  %12s  %-16s  %s\n",
-                           "------", "------------", "----------------", "--------------------");
-        if (written > 0 && offset + written < sizeof(response)) {
-            offset += written;
-        }
-    }
-
-    // 4. 遍历文件列表并格式化输出
-    for (int i = 0; i < fileCount; i++) {
-        file_t *file = &files[i];
-
-        // 确定文件类型
-        const char *typeStr;
-        char fileName[FILE_NAME_MAX_LEN + 2]; // +2 for potential '/' suffix
-
-        if (file->type == 0) { // 假设 0 表示目录
-            typeStr = "<DIR>";
-            snprintf(fileName, sizeof(fileName), "%s/", file->filename);
-        } else { // 1 表示普通文件
-            typeStr = "FILE";
-            strncpy(fileName, file->filename, sizeof(fileName) - 1);
-            fileName[sizeof(fileName) - 1] = '\0';
-        }
-
-        // 格式化文件大小
-        char sizeStr[13];
-        if (file->type == 0) { // 目录
-            snprintf(sizeStr, sizeof(sizeStr), "-");
-        } else if (file->file_size < 1024) {
-            snprintf(sizeStr, sizeof(sizeStr), "%lu B", (unsigned long)file->file_size);
-        } else if (file->file_size < 1024 * 1024) {
-            snprintf(sizeStr, sizeof(sizeStr), "%.1f KB", file->file_size / 1024.0);
-        } else if (file->file_size < 1024ULL * 1024 * 1024) {
-            snprintf(sizeStr, sizeof(sizeStr), "%.1f MB", file->file_size / (1024.0 * 1024.0));
-        } else {
-            snprintf(sizeStr, sizeof(sizeStr), "%.1f GB",
-                     file->file_size / (1024.0 * 1024.0 * 1024.0));
-        }
-
-        // 格式化更新时间
-        char timeStr[17];
-        struct tm *tm_info = localtime(&file->update_time);
-        strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M", tm_info);
-
-        // 添加到响应缓冲区
-        written = snprintf(response + offset, sizeof(response) - offset, "%-6s  %12s  %-16s  %s\n",
-                           typeStr, sizeStr, timeStr, fileName);
-
-        if (written > 0 && offset + written < sizeof(response)) {
-            offset += written;
-            count++;
-        } else {
-            log_warn("Response buffer full, truncating at %d items", count);
-            break;
-        }
-    }
-
-    // 5. 添加汇总信息
-    if (count == 0) {
-        offset = snprintf(response, sizeof(response), "Empty directory\n");
-        log_debug("Directory is empty");
-    } else {
-        if (offset + 30 < sizeof(response)) {
-            written = snprintf(response + offset, sizeof(response) - offset,
-                               "\nTotal: %d item(s)\n", count);
-            if (written > 0) {
-                offset += written;
-            }
-        }
-        log_debug("Listed %d items from directory", count);
-    }
-
-send_response:
-    if (sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, offset) < 0) {
-        log_error("ls: Failed to send response to client (fd=%d)", task->peerFd);
-    } else {
-        log_info("ls command completed: status=%d, items=%d, bytes=%zu", statusCode, count, offset);
-    }
-}
-/**
  * @brief 列出目录内容命令
  */
 void lsCommand(task_t *task) {
@@ -1127,7 +1010,6 @@ static int sendFileTraditional(int sockFd, const char *filePath, uint32_t fileSi
     close(fd);
     return 0;
 }
-
 /**
  * @brief 下载文件的命令
  * @param task 对应线程
@@ -1338,7 +1220,10 @@ void userLoginVerifyPassword(task_t *task) {
         sendResponse(task->peerFd, STATUS_FAIL, DATA_TYPE_TEXT, response, responseLen);
     }
 }
-
+/**
+ * @brief 用户注册校验用户名
+ * @param task 对应的线程
+ */
 void userRegisterVerifyUsername(task_t *task) {
     char response[RESPONSE_BUFF_SIZE];
     int responseLen = 0;
@@ -1353,6 +1238,10 @@ void userRegisterVerifyUsername(task_t *task) {
     }
     sendResponse(task->peerFd, status, DATA_TYPE_TEXT, response, responseLen);
 }
+/**
+ * @brief 用户注册校验密码
+ * @param task 对应的线程
+ */
 void userRegisterVerifyPassword(task_t *task) {
     char response[RESPONSE_BUFF_SIZE];
     int responseLen = 0;
@@ -1364,15 +1253,234 @@ void userRegisterVerifyPassword(task_t *task) {
         responseLen = snprintf(response, sizeof(response), "register failed,parse error");
     }
     log_info("register username=%s,password=%s", username, password);
-    int ret = insertUser(username, password);
-    if (ret < 0) {
+    int userId = insertUser(username, password);
+    if (userId < 0) {
         status = STATUS_FAIL;
         responseLen =
             snprintf(response, sizeof(response), "register failed,insert into table error.");
     } else {
-        responseLen = snprintf(response, sizeof(response), "register successfully,please login");
+        int ret = initUserVirtualTable(userId);
+        if (ret < 0) {
+            responseLen =
+                snprintf(response, sizeof(response), "register successfully,but initilize failed.");
+        } else {
+            responseLen =
+                snprintf(response, sizeof(response), "register successfully,please login");
+        }
     }
     sendResponse(task->peerFd, status, DATA_TYPE_TEXT, response, responseLen);
+}
+/**
+ * @brief 列出目录内容命令(数据库版本)
+ */
+void lsCommandVitrual(task_t *task) {
+    log_info("Executing ls command (virtual, fd=%d)", task->peerFd);
+
+    // 1. 获取用户信息
+    user_info_t *user = getListUser(task->peerFd);
+    if (NULL == user) {
+        log_error("User not logged in (fd=%d)", task->peerFd);
+        const char *errorMsg = "Error: Please login first\n";
+        sendResponse(task->peerFd, STATUS_FAIL, DATA_TYPE_TEXT, errorMsg, strlen(errorMsg));
+        return;
+    }
+    ResponseStatus statusCode = STATUS_SUCCESS;
+    char response[RESPONSE_LENGTH] = {0};
+    size_t offset = 0;
+    int count = 0;
+    // 2. 从数据库获取文件列表
+    file_t files[FILE_MAX_CNT];
+    int fileCount = listFiles(user, files, FILE_MAX_CNT);
+    if (fileCount < 0) {
+        log_error("Failed to list files from database (fd=%d)", task->peerFd);
+        statusCode = STATUS_FAIL;
+        offset = snprintf(response, sizeof(response), "ls error: database query failed\n");
+        goto send_response;
+    }
+    log_info("Retrieved %d files from database", fileCount);
+    // 3. 添加表头
+    int written = snprintf(response + offset, sizeof(response) - offset, "%-6s  %12s  %-16s  %s\n",
+                           "Type", "Size", "Modified", "Name");
+    if (written > 0 && offset + written < sizeof(response)) {
+        offset += written;
+        written = snprintf(response + offset, sizeof(response) - offset, "%-6s  %12s  %-16s  %s\n",
+                           "------", "------------", "----------------", "--------------------");
+        if (written > 0 && offset + written < sizeof(response)) {
+            offset += written;
+        }
+    }
+    // 4. 遍历文件列表并格式化输出
+    for (int i = 0; i < fileCount; i++) {
+        file_t *file = &files[i];
+        // 确定文件类型
+        const char *typeStr;
+        char fileName[FILE_NAME_MAX_LEN + 2]; // +2 for potential '/' suffix
+        if (file->type == 0) {                // 假设 0 表示目录
+            typeStr = "<DIR>";
+            snprintf(fileName, sizeof(fileName), "%s/", file->filename);
+        } else { // 1 表示普通文件
+            typeStr = "FILE";
+            strncpy(fileName, file->filename, sizeof(fileName) - 1);
+            fileName[sizeof(fileName) - 1] = '\0';
+        }
+        // 格式化文件大小
+        char sizeStr[13];
+        if (file->type == 0) { // 目录
+            snprintf(sizeStr, sizeof(sizeStr), "-");
+        } else if (file->file_size < 1024) {
+            snprintf(sizeStr, sizeof(sizeStr), "%lu B", (unsigned long)file->file_size);
+        } else if (file->file_size < 1024 * 1024) {
+            snprintf(sizeStr, sizeof(sizeStr), "%.1f KB", file->file_size / 1024.0);
+        } else if (file->file_size < 1024ULL * 1024 * 1024) {
+            snprintf(sizeStr, sizeof(sizeStr), "%.1f MB", file->file_size / (1024.0 * 1024.0));
+        } else {
+            snprintf(sizeStr, sizeof(sizeStr), "%.1f GB",
+                     file->file_size / (1024.0 * 1024.0 * 1024.0));
+        }
+        // 格式化更新时间
+        char timeStr[17];
+        struct tm *tm_info = localtime(&file->update_time);
+        strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M", tm_info);
+        // 添加到响应缓冲区
+        written = snprintf(response + offset, sizeof(response) - offset, "%-6s  %12s  %-16s  %s\n",
+                           typeStr, sizeStr, timeStr, fileName);
+        if (written > 0 && offset + written < sizeof(response)) {
+            offset += written;
+            count++;
+        } else {
+            log_warn("Response buffer full, truncating at %d items", count);
+            break;
+        }
+    }
+    // 5. 添加汇总信息
+    if (count == 0) {
+        offset = snprintf(response, sizeof(response), "Empty directory\n");
+        log_debug("Directory is empty");
+    } else {
+        if (offset + 30 < sizeof(response)) {
+            written = snprintf(response + offset, sizeof(response) - offset,
+                               "\nTotal: %d item(s)\n", count);
+            if (written > 0) {
+                offset += written;
+            }
+        }
+        log_debug("Listed %d items from directory", count);
+    }
+send_response:
+    if (sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, offset) < 0) {
+        log_error("ls: Failed to send response to client (fd=%d)", task->peerFd);
+    } else {
+        log_info("ls command completed: status=%d, items=%d, bytes=%zu", statusCode, count, offset);
+    }
+}
+/**
+ * @brief        : 当前工作目录命令
+ * @param         {task_t} *task: 任务结构
+**/
+void pwdCommandVirtual(task_t *task) {
+    log_info("Executing pwd command (fd=%d)", task->peerFd);
+    ResponseStatus statusCode = STATUS_SUCCESS;
+    char response[RESPONSE_LENGTH] = {0};
+    size_t responseLen = 0;
+    user_info_t *user = getListUser(task->peerFd);
+    // 直接返回当前虚拟路径，无需进行路径转换
+    log_debug("Current virtual path: %s", user->pwd);
+    responseLen = snprintf(response, sizeof(response), "%s\n", user->pwd);
+
+    if (sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, responseLen) < 0) {
+        log_error("pwd: Failed to send response to client (fd=%d)", task->peerFd);
+    } else {
+        log_info("pwd command completed: status=%d, path=%s", statusCode, currentVirtualPath);
+    }
+}
+/**
+ * @brief 进入某一目录的命令
+ * @param task 执行该命令的线程
+ */
+void cdCommandVirtual(task_t *task) {
+    log_info("Executing cd command (fd=%d)", task->peerFd);
+    char response[RESPONSE_LENGTH];
+    ResponseStatus statusCode = STATUS_SUCCESS;
+    ssize_t responseLen = 0;
+    // 1. 检查参数是否为空
+    if (task->data[0] == '\0') {
+        log_error("cd: Empty directory name");
+        statusCode = STATUS_INVALID_PARAM;
+        responseLen =
+            snprintf(response, sizeof(response), "cd error: directory name cannot be empty\n");
+        goto send_response;
+    }
+
+    user_info_t *user = getListUser(task->peerFd);
+    int directoryId = getDirectoryId(user, task->data);
+    if (directoryId < 0) {
+        responseLen =
+            snprintf(response, sizeof(response), "cd error: directory: %s unexist\n", task->data);
+    } else {
+        responseLen =
+            snprintf(response, sizeof(response), "Changed to directory: %s\n", task->data);
+    }
+
+    log_debug("Changing to directory: %s", task->data);
+
+send_response:
+    if (sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, responseLen) < 0) {
+        log_error("cd: Failed to send response to client (fd=%d)", task->peerFd);
+    } else {
+        log_info("cd command completed: status=%d, new_path=%s", statusCode,
+                 statusCode == STATUS_SUCCESS ? task->data : "error");
+    }
+}
+/**
+ * @brief 进入某一目录的命令
+ * @param task 执行该命令的线程
+ */
+void mkdirCommandVirtual(task_t *task) {
+    log_info("Executing mkdir command (fd=%d)", task->peerFd);
+    char response[RESPONSE_LENGTH];
+    ResponseStatus statusCode = STATUS_SUCCESS;
+    ssize_t responseLen = 0;
+    user_info_t *user = getListUser(task->peerFd);
+    // 1. 检查参数是否为空
+    if (task->data[0] == '\0') {
+        log_error("mkdir: Empty directory name");
+        statusCode = STATUS_INVALID_PARAM;
+        responseLen =
+            snprintf(response, sizeof(response), "mkdir error: directory name cannot be empty\n");
+        goto send_response;
+    }
+    char targetPath[PATH_MAX_LENGTH];
+    strcpy(targetPath, task->data);
+    const char *parsePath[128];
+    int idx = 0;
+    if (targetPath[0] == '/') {
+        parsePath[idx] = "/";
+        idx++;
+    } else if (targetPath[0] != '.') {
+        parsePath[idx] = ".";
+        idx++;
+    }
+    char *token = strtok(targetPath, "/");
+    while (token != NULL && idx < 128) {
+        parsePath[idx] = token;
+        idx++;
+        token = strtok(NULL, "/");
+    }
+    parsePath[idx] = NULL;
+    int ret = resolveOrCreateDirectory(user, parsePath);
+    if (ret >= 0) {
+        responseLen = snprintf(response, sizeof(response), "mkdir %s successfully.\n", task->data);
+    } else {
+        responseLen =
+            snprintf(response, sizeof(response), "mkdir %s failed(unknown error).\n", task->data);
+    }
+
+send_response:
+    if (sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, responseLen) < 0) {
+        log_error("mkdir: Failed to send response to client (fd=%d)", task->peerFd);
+    } else {
+        log_info("mkdir successfully.");
+    }
 }
 /**
  * @brief        : 执行命令
@@ -1392,7 +1500,8 @@ void executeCmd(task_t *task) {
             lsCommandVitrual(task);
             break;
         case CMD_TYPE_MKDIR:
-            mkdirCommand(task);
+            // mkdirCommand(task);
+            mkdirCommandVirtual(task);
             break;
         case CMD_TYPE_RMDIR:
             rmdirCommand(task);
