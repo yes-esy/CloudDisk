@@ -30,3 +30,6 @@ CREATE TABLE virtual_fs (
     INDEX idx_owner_size (owner_id, file_size)
 
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='虚拟文件系统表';
+-- 注意：表名应该是 virtual_fs，而不是 virtual
+INSERT INTO virtual_fs (parent_id, filename, owner_id, file_size, type, is_deleted) 
+VALUES (0, '/', 2, 4096, 2, 0);
