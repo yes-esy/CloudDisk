@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-24 23:31:24
+ * @LastEditTime : 2025-12-25 23:43:33
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "command.h"
@@ -1315,7 +1315,7 @@ void lsCommandVitrual(task_t *task) {
         // 确定文件类型
         const char *typeStr;
         char fileName[FILE_NAME_MAX_LEN + 2]; // +2 for potential '/' suffix
-        if (file->type == 0) {                // 假设 0 表示目录
+        if (file->type == 2) {                // 假设 0 表示目录
             typeStr = "<DIR>";
             snprintf(fileName, sizeof(fileName), "%s/", file->filename);
         } else { // 1 表示普通文件
@@ -1382,16 +1382,66 @@ void pwdCommandVirtual(task_t *task) {
     ResponseStatus statusCode = STATUS_SUCCESS;
     char response[RESPONSE_LENGTH] = {0};
     size_t responseLen = 0;
+
     user_info_t *user = getListUser(task->peerFd);
-    // 直接返回当前虚拟路径，无需进行路径转换
+    if (!user) {
+        log_error("pwd: User not found for fd=%d", task->peerFd);
+        const char *errorMsg = "Error: User session not found\n";
+        sendResponse(task->peerFd, STATUS_FAIL, DATA_TYPE_TEXT, errorMsg, strlen(errorMsg));
+        return;
+    }
+
     log_debug("Current virtual path: %s", user->pwd);
     responseLen = snprintf(response, sizeof(response), "%s\n", user->pwd);
 
     if (sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, responseLen) < 0) {
         log_error("pwd: Failed to send response to client (fd=%d)", task->peerFd);
     } else {
-        log_info("pwd command completed: status=%d, path=%s", statusCode, currentVirtualPath);
+        log_info("pwd command completed: status=%d, path=%s", statusCode, user->pwd);
     }
+}
+void changeUserPwd(user_info_t *user, const char **parsePath) {
+    if (!user || !parsePath || !parsePath[0]) {
+        return;
+    }
+
+    // 清空当前路径
+    memset(user->pwd, 0, sizeof(user->pwd));
+
+    // 重建路径字符串
+    size_t offset = 0;
+
+    // 第一个元素是根目录 "/"
+    if (strcmp(parsePath[0], "/") == 0) {
+        user->pwd[offset++] = '/';
+    }
+
+    // 拼接后续路径段
+    for (int i = 1; parsePath[i] != NULL && offset < PATH_MAX_LENGTH - 1; i++) {
+        // ✅ 修复: 只要不是刚开始就在根目录,就需要添加分隔符
+        if (offset > 0 && user->pwd[offset - 1] != '/') {
+            user->pwd[offset++] = '/';
+        }
+
+        // 拷贝路径段
+        size_t len = strlen(parsePath[i]);
+        if (offset + len >= PATH_MAX_LENGTH - 1) {
+            log_warn("Path too long, truncating");
+            break;
+        }
+
+        strcpy(user->pwd + offset, parsePath[i]);
+        offset += len;
+    }
+
+    // 确保以 null 结尾
+    user->pwd[offset] = '\0';
+
+    // 特殊情况：如果只有根目录，确保是 "/"
+    if (offset == 1 && user->pwd[0] == '/') {
+        user->pwd[1] = '\0';
+    }
+    log_info("User pwd updated to: %s", user->pwd);
 }
 /**
  * @brief 进入某一目录的命令
@@ -1402,6 +1452,7 @@ void cdCommandVirtual(task_t *task) {
     char response[RESPONSE_LENGTH];
     ResponseStatus statusCode = STATUS_SUCCESS;
     ssize_t responseLen = 0;
+
     // 1. 检查参数是否为空
     if (task->data[0] == '\0') {
         log_error("cd: Empty directory name");
@@ -1412,23 +1463,47 @@ void cdCommandVirtual(task_t *task) {
     }
 
     user_info_t *user = getListUser(task->peerFd);
-    int directoryId = getDirectoryId(user, task->data);
-    if (directoryId < 0) {
-        responseLen =
-            snprintf(response, sizeof(response), "cd error: directory: %s unexist\n", task->data);
-    } else {
-        responseLen =
-            snprintf(response, sizeof(response), "Changed to directory: %s\n", task->data);
+    if (!user) {
+        log_error("cd: User not found for fd=%d", task->peerFd);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "cd error: user session not found\n");
+        goto send_response;
     }
 
-    log_debug("Changing to directory: %s", task->data);
+    const char *parsePath[PATH_MAX_DEPTH];
+
+    // 检查路径解析是否成功
+    if (parsePathToArray(task->data, parsePath, user->pwd) < 0) {
+        log_error("cd: Path parsing failed (invalid path or too many '..'): %s", task->data);
+        statusCode = STATUS_INVALID_PARAM;
+        responseLen = snprintf(response, sizeof(response),
+                               "cd error: invalid path (cannot go beyond root directory)\n");
+        goto send_response;
+    }
+
+    int directoryId = getDirectoryId(user, parsePath);
+
+    if (directoryId < 0) {
+        log_warn("cd: Directory not found: %s", task->data);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response),
+                               "cd error: directory '%s' does not exist\n", task->data);
+    } else {
+        changeUserPwd(user, parsePath);
+        user->current_dir_id = directoryId; // 同步更新 current_dir_id
+        log_info("cd: Changed to directory: %s (id=%d)", user->pwd, directoryId);
+        responseLen = snprintf(response, sizeof(response), "Changed to directory: %s\n", user->pwd);
+    }
+    for (int i = 0; parsePath[i] != NULL; i++) {
+        free((void *)parsePath[i]);
+    }
 
 send_response:
     if (sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, responseLen) < 0) {
         log_error("cd: Failed to send response to client (fd=%d)", task->peerFd);
     } else {
         log_info("cd command completed: status=%d, new_path=%s", statusCode,
-                 statusCode == STATUS_SUCCESS ? task->data : "error");
+                 statusCode == STATUS_SUCCESS ? user->pwd : "error");
     }
 }
 /**
@@ -1449,24 +1524,8 @@ void mkdirCommandVirtual(task_t *task) {
             snprintf(response, sizeof(response), "mkdir error: directory name cannot be empty\n");
         goto send_response;
     }
-    char targetPath[PATH_MAX_LENGTH];
-    strcpy(targetPath, task->data);
-    const char *parsePath[128];
-    int idx = 0;
-    if (targetPath[0] == '/') {
-        parsePath[idx] = "/";
-        idx++;
-    } else if (targetPath[0] != '.') {
-        parsePath[idx] = ".";
-        idx++;
-    }
-    char *token = strtok(targetPath, "/");
-    while (token != NULL && idx < 128) {
-        parsePath[idx] = token;
-        idx++;
-        token = strtok(NULL, "/");
-    }
-    parsePath[idx] = NULL;
+    const char *parsePath[PATH_MAX_DEPTH];
+    parsePathToArray(task->data, parsePath, user->pwd);
     int ret = resolveOrCreateDirectory(user, parsePath);
     if (ret >= 0) {
         responseLen = snprintf(response, sizeof(response), "mkdir %s successfully.\n", task->data);
@@ -1490,10 +1549,12 @@ send_response:
 void executeCmd(task_t *task) {
     switch (task->type) {
         case CMD_TYPE_PWD:
-            pwdCommand(task);
+            // pwdCommand(task);
+            pwdCommandVirtual(task);
             break;
         case CMD_TYPE_CD:
-            cdCommand(task);
+            // cdCommand(task);
+            cdCommandVirtual(task);
             break;
         case CMD_TYPE_LS:
             // lsCommand(task);

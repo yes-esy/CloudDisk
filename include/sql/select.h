@@ -19,6 +19,7 @@
 // 1. 定义长度常量，方便维护
 #define FILE_NAME_MAX_LEN 256 // 对应数据库 VARCHAR(255)，+1用于 '\0'
 #define MD5_STR_LEN 33        // 对应数据库 CHAR(32)，+1用于 '\0'
+#define ROOT_ID 0
 
 // 2. 使用枚举代替魔数，提高代码可读性
 typedef enum {
@@ -53,3 +54,29 @@ void DatabaseClose();
 int insertUser(const char *username, const char *password);
 int selectUserInfo(user_info_t *user, char *response);
 int listFiles(user_info_t *user, file_t *files, int max_files);
+/**
+ * @brief 用户注册后初始化virtual file table
+ * @param userId 用户id
+ */
+int initUserVirtualTable(int userId);
+/**
+ * @brief 向文件表中插入一个记录
+ * @param file 插入的文件结构体指针
+ * @return 成功返回 0，失败返回 -1
+ */
+int insertFile(file_t *file);
+/**
+ * @brief 解析路径字符串，获取目标目录的 ID
+ * @param user 用户信息结构体指针
+ * @param path_str 用户输入的路径
+ * @return 成功返回目标目录 ID，失败返回 -1
+ */
+int getDirectoryId(user_info_t *user, const char **path);
+/**
+ * @brief 查询路径，不存在则插入
+ * @param user 操作的用户
+ * @param path 解析后的路径数组
+ * @param con 数据库连接对象
+ * @return 成功返回目标目录ID，失败返回 -1
+ */
+int resolveOrCreateDirectory(user_info_t *user, const char **path);

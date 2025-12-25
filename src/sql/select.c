@@ -405,81 +405,56 @@ int listFiles(user_info_t *user, file_t *files, int max_files) {
 /**
  * @brief 解析路径字符串，获取目标目录的 ID
  * @param user 用户信息结构体指针
- * @param path_str 用户输入的路径
+ * @param path 用户输入的路径解析成的字符指针数组
  * @return 成功返回目标目录 ID，失败返回 -1
  */
-int getDirectoryId(user_info_t *user, char *path_str) {
+int getDirectoryId(user_info_t *user, const char **path) {
     // 1. 参数检查
-    if (!user || !path_str)
+    if (!user || !path || !path[0])
         return -1;
+
     Connection_T con = ConnectionPool_getConnection(pool);
     if (!con)
         return -1;
-    // 2. 复制路径字符串
-    char *path_copy = strdup(path_str);
-    if (!path_copy) {
+
+    uint32_t targetDirectId = 0;
+
+    // 2. 检查路径必须以 "/" 开头
+    if (strcmp(path[0], "/") == 0) {
+        targetDirectId = ROOT_ID;
+    } else {
+        log_error("getDirectoryId: Path must start with '/', got: %s", path[0]);
         Connection_close(con);
         return -1;
     }
-    uint32_t target_id = user->current_dir_id;
-    char *token;
-    const char *delim = "/";
-    // 3. 判断绝对路径
-    if (path_str[0] == '/') {
-        target_id = 0; // 回到根目录 ID
-    }
-    token = strtok(path_copy, delim);
-    while (token != NULL) {
-        // 处理 "."
-        if (strcmp(token, ".") == 0) {
-            token = strtok(NULL, delim);
-            continue;
-        }
-        // 处理 ".."
-        if (strcmp(token, "..") == 0) {
-            // 优化：如果在根目录，直接跳过查询
-            if (target_id != 0) {
-                ResultSet_T rs =
-                    Connection_executeQuery(con,
-                                            "SELECT parent_id "
-                                            "FROM virtual_fs "
-                                            "WHERE id = %u AND type = 2 AND owner_id = %d",
-                                            target_id, user->user_id);
-                if (rs && ResultSet_next(rs)) {
-                    target_id = (uint32_t)ResultSet_getInt(rs, 1);
-                }
-            }
-            token = strtok(NULL, delim);
-            continue;
-        }
-        // 4. 处理普通目录名
-        ResultSet_T rs = Connection_executeQuery(
-            con,
-            "SELECT id "
-            "FROM virtual_fs "
-            "WHERE parent_id = %u AND filename = '%s' AND type = 2 AND owner_id = %d",
-            target_id, token, user->user_id);
 
-        int found = 0;
-        if (rs) {
-            if (ResultSet_next(rs)) {
-                target_id = (uint32_t)ResultSet_getInt(rs, 1);
-                found = 1;
-            }
-        }
-        if (!found) {
-            log_error("Path component not found: %s (parent_id=%u)", token, target_id);
-            free(path_copy);
-            Connection_close(con); // 别忘了关闭连接
+    // 3. 遍历路径段
+    int idx = 1;
+    while (path[idx] != NULL) {
+        ResultSet_T selectRes =
+            Connection_executeQuery(con,
+                                    "SELECT id FROM virtual_fs "
+                                    "WHERE parent_id = %d "
+                                    "AND owner_id = %u "
+                                    "AND type = 2 "
+                                    "AND filename = '%s'",
+                                    targetDirectId, (unsigned int)user->user_id, path[idx]);
+
+        if (ResultSet_next(selectRes)) {
+            // 目录存在，获取 ID 并进入下一层
+            targetDirectId = (uint32_t)ResultSet_getInt(selectRes, 1);
+            log_debug("Found directory '%s' with id=%u", path[idx], targetDirectId);
+        } else {
+            // 目录不存在
+            log_warn("Directory '%s' not found under parent_id=%u", path[idx], targetDirectId);
+            Connection_close(con);
             return -1;
         }
-        token = strtok(NULL, delim);
+        idx++;
     }
 
-    free(path_copy);
     Connection_close(con);
-    // 返回最终的 ID
-    return (int)target_id;
+    return (int)targetDirectId;
 }
 /**
  * @brief 查询路径，不存在则插入
@@ -494,9 +469,7 @@ int resolveOrCreateDirectory(user_info_t *user, const char **path) {
     }
     int targetDirectId = -1;
     // 1. 确定起始目录 ID
-    if (strcmp(path[0], ".")) {
-        targetDirectId = user->current_dir_id;
-    } else if (strcmp(path[0], "/")) {
+    if (strcmp(path[0], "/") == 0) {
         targetDirectId = ROOT_ID;
     } else {
         // 路径解析逻辑错误，理应只有 "." 或 "/" 开头，或者这里做兼容处理

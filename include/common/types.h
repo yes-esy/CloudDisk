@@ -33,7 +33,7 @@
 #define USERNAME "please input a valid user name:\n"
 #define PASSWORD "please input the right password:\n"
 #define MMAP_THRESHOLD (100 * 1024 * 1024) // 100MB
-
+#define PATH_MAX_DEPTH 128
 /* 命令类型枚举 */
 typedef enum {
     CMD_TYPE_PWD = 1,
