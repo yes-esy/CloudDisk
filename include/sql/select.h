@@ -66,17 +66,59 @@ int initUserVirtualTable(int userId);
  */
 int insertFile(file_t *file);
 /**
- * @brief 解析路径字符串，获取目标目录的 ID
+ * @brief 解析路径字符串,获取目标目录的 ID
  * @param user 用户信息结构体指针
- * @param path_str 用户输入的路径
- * @return 成功返回目标目录 ID，失败返回 -1
+ * @param path 用户输入的路径解析成的二维字符数组
+ * @param pathCount 路径段数量
+ * @return 成功返回目标目录 ID,失败返回 -1
  */
-int getDirectoryId(user_info_t *user, const char **path);
+int getDirectoryId(user_info_t *user, char path[][PATH_SEGMENT_MAX_LENGTH], int pathCount);
 /**
- * @brief 查询路径，不存在则插入
+ * @brief 查询路径,不存在则插入
  * @param user 操作的用户
- * @param path 解析后的路径数组
- * @param con 数据库连接对象
- * @return 成功返回目标目录ID，失败返回 -1
+ * @param path 解析后的路径二维数组
+ * @param pathCount 路径段数量
+ * @return 成功返回目标目录ID,失败返回 -1
  */
-int resolveOrCreateDirectory(user_info_t *user, const char **path);
+int resolveOrCreateDirectory(user_info_t *user, char path[][PATH_SEGMENT_MAX_LENGTH],
+                             int pathCount);
+/**
+ * @brief 删除某一文件夹以及该文件夹内所有的文件夹以及文件
+ * @param user 操作的用户
+ * @param targetDirectId 目标路径对应id
+ * @param pathCount 路径段数量
+ * @return 成功返回0,失败返回 -1
+ */
+int deleteFiles(user_info_t *user, int targetDirectId);
+/**
+ * @brief 根据MD5查询文件是否存在（用于秒传）
+ * @param file 文件结构体指针，调用前需填入 file->md5
+ * @return 0=找到, 1=未找到, -1=错误
+ */
+int selectFileByMd5(file_t *file);
+/**
+ * @brief 文件传输过程中中断后向t_upload_task表中查询一条记录
+ * @param filename 文件名
+ * @param MD5 文件MD5
+ */
+uint64_t selectUploadTask(const char *filename, const char *MD5);
+/**
+ * @brief 传输过程中断向t_upload_task任务中写入一条记录
+ * @param header 文件传输头
+ * @param uploadedSize 已成功传输的大小
+ */
+int insertUploadTask(file_transfer_header_t *header, uint64_t uploadedSize);
+/**
+ * @brief 断点续传的文件完成传输后从此表删除记录
+ * @param file_header 文件传输头
+ */
+int deleteUploadTask(file_transfer_header_t *file_header);
+/**
+ * @brief 通过路径查找文件
+ * @param user 执行操作的用户
+ * @param path 目标路径
+ * @param 目标文件
+ * @return 成功返回文件id失败返回-1
+ */
+int selectFileByPath(user_info_t *user, char path[][PATH_SEGMENT_MAX_LENGTH], int pathCount,
+                     file_t *file);

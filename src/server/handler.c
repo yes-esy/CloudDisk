@@ -52,8 +52,8 @@ void handleMessage(int sockFd, int epFd, taskQueue_t *queue) {
         if (ret > 0) {
             log_info(" handleMessage: Received data: %.*s", length, task->data);
             //往线程池中添加任务
-            if (task->type == CMD_TYPE_PUTS) {
-                log_info(" handleMessage: PUTS command detected, removing from epoll");
+            if (task->type == CMD_TYPE_PUTS || task->type == CMD_TYPE_GETS) {
+                log_info(" handleMessage: PUTS/GETS command detected, removing from epoll");
                 //是上传文件任务，就暂时先从epoll中删除监听
                 delEpollReadfd(epFd, sockFd);
             }

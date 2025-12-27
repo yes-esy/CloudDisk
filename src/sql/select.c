@@ -78,15 +78,16 @@ int selectUserInfo(user_info_t *user, char *response) {
     Connection_T con = ConnectionPool_getConnection(pool);
     char selectStr[SQL_LENGTH];
     snprintf(selectStr, sizeof(selectStr),
-             "select cryptpasswd,salt,pwd from t_user where username='%s'", user->name);
+             "select id,cryptpasswd,salt,pwd from t_user where username='%s'", user->name);
     ResultSet_T result = Connection_executeQuery(con, "%s", selectStr);
     if (!ResultSet_next(result)) {
         Connection_close(con);
         return -1;
     }
-    const char *cryptpasswd = ResultSet_getString(result, 1);
-    const char *salt = ResultSet_getString(result, 2);
-    const char *pwd = ResultSet_getString(result, 3);
+    user->user_id = ResultSet_getInt(result, 1);
+    const char *cryptpasswd = ResultSet_getString(result, 2);
+    const char *salt = ResultSet_getString(result, 3);
+    const char *pwd = ResultSet_getString(result, 4);
     strcpy(user->encrypted, cryptpasswd);
     strcpy(user->pwd, pwd);
     strcpy(user->salt, salt);
@@ -365,15 +366,16 @@ int listFiles(user_info_t *user, file_t *files, int max_files) {
     TRY {
         // 2. 执行单次查询
         // 直接命中联合索引 (owner_id, parent_id)
-        result = Connection_executeQuery(con,
-                                         "SELECT "
-                                         "id, parent_id, filename, owner_id, md5, file_size, type "
-                                         "FROM virtual_fs "
-                                         "WHERE owner_id = %u "
-                                         "AND parent_id = %u "
-                                         "AND is_deleted = 0 "
-                                         "ORDER BY type ASC, filename ASC",
-                                         (unsigned int)user->user_id, (unsigned int)parent_id);
+        result = Connection_executeQuery(
+            con,
+            "SELECT "
+            "id, parent_id, filename, owner_id, md5, file_size, type,updated_at "
+            "FROM virtual_fs "
+            "WHERE owner_id = %u "
+            "AND parent_id = %u "
+            "AND is_deleted = 0 "
+            "ORDER BY type ASC, filename ASC",
+            (unsigned int)user->user_id, (unsigned int)parent_id);
 
         // 3. 填充结果
         while (ResultSet_next(result)) {
@@ -391,6 +393,7 @@ int listFiles(user_info_t *user, file_t *files, int max_files) {
                 snprintf(f->md5, sizeof(f->md5), "%s", md5);
             f->file_size = (uint64_t)ResultSet_getLLong(result, 6);
             f->type = (uint8_t)ResultSet_getInt(result, 7);
+            f->update_time = ResultSet_getTimestamp(result, 8);
             count++;
         }
     }
@@ -403,22 +406,20 @@ int listFiles(user_info_t *user, file_t *files, int max_files) {
     return count;
 }
 /**
- * @brief 解析路径字符串，获取目标目录的 ID
+ * @brief 解析路径字符串,获取目标目录的 ID
  * @param user 用户信息结构体指针
- * @param path 用户输入的路径解析成的字符指针数组
- * @return 成功返回目标目录 ID，失败返回 -1
+ * @param path 用户输入的路径解析成的二维字符数组
+ * @param pathCount 路径段数量
+ * @return 成功返回目标目录 ID,失败返回 -1
  */
-int getDirectoryId(user_info_t *user, const char **path) {
+int getDirectoryId(user_info_t *user, char path[][PATH_SEGMENT_MAX_LENGTH], int pathCount) {
     // 1. 参数检查
-    if (!user || !path || !path[0])
+    if (!user || !path || pathCount <= 0)
         return -1;
-
     Connection_T con = ConnectionPool_getConnection(pool);
     if (!con)
         return -1;
-
     uint32_t targetDirectId = 0;
-
     // 2. 检查路径必须以 "/" 开头
     if (strcmp(path[0], "/") == 0) {
         targetDirectId = ROOT_ID;
@@ -429,8 +430,7 @@ int getDirectoryId(user_info_t *user, const char **path) {
     }
 
     // 3. 遍历路径段
-    int idx = 1;
-    while (path[idx] != NULL) {
+    for (int idx = 1; idx < pathCount && path[idx][0] != '\0'; idx++) {
         ResultSet_T selectRes =
             Connection_executeQuery(con,
                                     "SELECT id FROM virtual_fs "
@@ -441,7 +441,7 @@ int getDirectoryId(user_info_t *user, const char **path) {
                                     targetDirectId, (unsigned int)user->user_id, path[idx]);
 
         if (ResultSet_next(selectRes)) {
-            // 目录存在，获取 ID 并进入下一层
+            // 目录存在,获取 ID 并进入下一层
             targetDirectId = (uint32_t)ResultSet_getInt(selectRes, 1);
             log_debug("Found directory '%s' with id=%u", path[idx], targetDirectId);
         } else {
@@ -450,21 +450,21 @@ int getDirectoryId(user_info_t *user, const char **path) {
             Connection_close(con);
             return -1;
         }
-        idx++;
     }
 
     Connection_close(con);
     return (int)targetDirectId;
 }
 /**
- * @brief 查询路径，不存在则插入
+ * @brief 查询路径,不存在则插入
  * @param user 操作的用户
- * @param path 解析后的路径数组
- * @param con 数据库连接对象
- * @return 成功返回目标目录ID，失败返回 -1
+ * @param path 解析后的路径二维数组
+ * @param pathCount 路径段数量
+ * @return 成功返回目标目录ID,失败返回 -1
  */
-int resolveOrCreateDirectory(user_info_t *user, const char **path) {
-    if (!user || !path) {
+int resolveOrCreateDirectory(user_info_t *user, char path[][PATH_SEGMENT_MAX_LENGTH],
+                             int pathCount) {
+    if (!user || !path || pathCount <= 0) {
         return -1;
     }
     int targetDirectId = -1;
@@ -472,12 +472,15 @@ int resolveOrCreateDirectory(user_info_t *user, const char **path) {
     if (strcmp(path[0], "/") == 0) {
         targetDirectId = ROOT_ID;
     } else {
-        // 路径解析逻辑错误，理应只有 "." 或 "/" 开头，或者这里做兼容处理
+        // 路径解析逻辑错误,理应只有 "/" 开头
         return -1;
     }
-    int idx = 1;
     Connection_T con = ConnectionPool_getConnection(pool);
-    while (path[idx] != NULL) {
+    if (!con) {
+        return -1;
+    }
+    // 2. 遍历路径段
+    for (int idx = 1; idx < pathCount && path[idx][0] != '\0'; idx++) {
         ResultSet_T selectRes =
             Connection_executeQuery(con,
                                     "SELECT id FROM virtual_fs "
@@ -488,12 +491,10 @@ int resolveOrCreateDirectory(user_info_t *user, const char **path) {
                                     targetDirectId, (unsigned int)user->user_id, path[idx]);
 
         if (ResultSet_next(selectRes)) {
-            // 目录存在，获取 ID 并进入下一层
+            // 目录存在,获取 ID 并进入下一层
             targetDirectId = (int)ResultSet_getInt(selectRes, 1);
         } else {
-            // 目录不存在，插入新目录
-            // 注意：这里假设 Connection_execute 失败会抛出异常或至少我们能拿到 LastRowId
-            // 建议增加 try-catch (如果 libzdb 开启了异常模式) 或检查返回值
+            // 目录不存在,创建新目录
             TRY {
                 Connection_execute(
                     con,
@@ -505,15 +506,223 @@ int resolveOrCreateDirectory(user_info_t *user, const char **path) {
                 );
                 // 获取刚插入行的 ID
                 targetDirectId = (int)Connection_lastRowId(con);
+                log_info("Created directory '%s' with id=%d", path[idx], targetDirectId);
             }
             CATCH(SQLException) {
-                log_error("insert error:%s", SQLException.name);
+                log_error("Insert directory error: %s", Exception_frame.message);
+                Connection_close(con);
                 return -1;
             }
             END_TRY;
         }
-        idx++;
     }
 
+    Connection_close(con);
     return targetDirectId;
+}
+
+/**
+ * @brief 删除某一文件夹以及该文件夹内所有的文件夹以及文件
+ * @param user 操作的用户
+ * @param path 解析后的路径二维数组
+ * @param pathCount 路径段数量
+ * @return 成功返回0,失败返回 -1
+ */
+int deleteFiles(user_info_t *user, int targetDirectId) {
+    if (!user) {
+        return -1;
+    }
+    if (targetDirectId < 0) {
+        log_error("Target directory not found");
+        return -1;
+    }
+
+    // 2. 防止删除根目录
+    if (targetDirectId == ROOT_ID) {
+        log_error("Cannot delete root directory");
+        return -1;
+    }
+
+    Connection_T con = ConnectionPool_getConnection(pool);
+    if (!con) {
+        return -1;
+    }
+
+    int ret = -1;
+    TRY {
+        // 3. 使用递归CTE查找所有子节点并逻辑删除
+        Connection_execute(con,
+                           "UPDATE virtual_fs "
+                           "SET is_deleted = 1 "
+                           "WHERE id IN ( "
+                           "    WITH RECURSIVE dir_tree AS ( "
+                           "        SELECT id FROM virtual_fs "
+                           "        WHERE id = %u AND owner_id = %u "
+                           "        UNION ALL "
+                           "        SELECT vf.id FROM virtual_fs vf "
+                           "        INNER JOIN dir_tree dt ON vf.parent_id = dt.id "
+                           "        WHERE vf.owner_id = %u "
+                           "    ) "
+                           "    SELECT id FROM dir_tree "
+                           ")",
+                           (unsigned int)targetDirectId, (unsigned int)user->user_id,
+                           (unsigned int)user->user_id);
+
+        int affected = Connection_rowsChanged(con);
+        log_info("Deleted %d files/directories under id=%d", affected, targetDirectId);
+        ret = 0;
+    }
+    CATCH(SQLException) {
+        log_error("Delete error: %s", Exception_frame.message);
+        ret = -1;
+    }
+    END_TRY;
+
+    Connection_close(con);
+    return ret;
+}
+/**
+ * @brief 文件传输过程中中断后向t_upload_task表中查询一条记录
+ * @param filename 文件名
+ * @param MD5 文件MD5
+ */
+uint64_t selectUploadTask(const char *filename, const char *MD5) {
+    if (NULL == filename || NULL == MD5) {
+        return 0;
+    }
+    uint64_t ret = 0;
+    Connection_T con = ConnectionPool_getConnection(pool);
+    ResultSet_T result =
+        Connection_executeQuery(con, "select uploaded_size from t_upload_task where md5='%s'", MD5);
+    if (ResultSet_next(result)) {
+        ret = (uint64_t)ResultSet_getLLong(result, 1);
+    }
+    Connection_close(con);
+    return ret;
+}
+/**
+ * @brief 传输过程中断向t_upload_task任务中写入一条记录
+ * @param header 文件传输头
+ * @param uploadedSize 已成功传输的大小
+ */
+int insertUploadTask(file_transfer_header_t *header, uint64_t uploadedSize) {
+    if (NULL == header || 0 == uploadedSize) {
+        return -1;
+    }
+    Connection_T con = ConnectionPool_getConnection(pool);
+    PreparedStatement_T stmt = NULL;
+    int ret = 0;
+    TRY {
+        // 使用参数化查询（? 为占位符）
+        stmt = Connection_prepareStatement(
+            con, "INSERT INTO t_upload_task(md5, total_size, uploaded_size, status) "
+                 "VALUES (?, ?, ?, ?)");
+        PreparedStatement_setString(stmt, 1, header->checksum); // md5 / filename
+        PreparedStatement_setLLong(stmt, 2, header->fileSize);  // total_size
+        PreparedStatement_setLLong(stmt, 3, uploadedSize);      // uploaded_size
+        PreparedStatement_setInt(stmt, 4, 0);                   // status
+        PreparedStatement_executeQuery(stmt);
+    }
+    CATCH(SQLException) {
+        log_error("SQL Error: %s", Exception_frame.message);
+        ret = -1;
+    }
+    FINALLY {
+        Connection_close(con);
+    }
+    END_TRY;
+
+    return ret;
+}
+/**
+ * @brief 断点续传的文件完成传输后从此表删除记录
+ * @param file_header 文件传输头
+ */
+int deleteUploadTask(file_transfer_header_t *file_header) {
+    if (NULL == file_header) {
+        return -1;
+    }
+    int ret = -1;
+    Connection_T con = ConnectionPool_getConnection(pool);
+    PreparedStatement_T stmt = NULL;
+    TRY {
+        stmt = Connection_prepareStatement(con, "delete from t_upload_task where md5 = ?");
+        PreparedStatement_setString(stmt, 1, file_header->checksum); // md5 / filename
+        PreparedStatement_executeQuery(stmt);
+    }
+    CATCH(SQLException) {
+        log_error("SQL Error: %s", Exception_frame.message);
+        ret = -1;
+    }
+    FINALLY {
+        Connection_close(con);
+    }
+    END_TRY;
+    return ret;
+}
+/**
+ * @brief 通过路径查找文件
+ * @param user 执行操作的用户
+ * @param path 目标路径
+ * @param 目标文件
+ * @return 成功返回文件id失败返回-1
+ */
+int selectFileByPath(user_info_t *user, char path[][PATH_SEGMENT_MAX_LENGTH], int pathCount,
+                     file_t *file) {
+    if (!user || !path || pathCount <= 0 || !file) {
+        return -1;
+    }
+    int targetId = -1;
+    // 1. 确定起始目录 ID
+    if (strcmp(path[0], "/") == 0) {
+        targetId = ROOT_ID;
+    } else {
+        // 路径解析逻辑错误,理应只有 "/" 开头
+        return -1;
+    }
+    Connection_T con = ConnectionPool_getConnection(pool);
+    if (!con) {
+        return -1;
+    }
+    uint8_t type = 2;
+    // 2. 遍历路径段
+    for (int idx = 1; idx < pathCount && path[idx][0] != '\0'; idx++) {
+        if (idx == pathCount - 1) {
+            type = 1;
+        }
+        PreparedStatement_T statement =
+            Connection_prepareStatement(con, "SELECT "
+                                             "id,parent_id,filename,owner_id,md5,file_size,type "
+                                             "FROM virtual_fs "
+                                             "WHERE parent_id = ? "
+                                             "AND owner_id = ? "
+                                             "AND type = ? "
+                                             "AND filename = ?");
+        PreparedStatement_setInt(statement, 1, targetId);
+        PreparedStatement_setInt(statement, 2, user->user_id);
+        PreparedStatement_setInt(statement, 3, type);
+        PreparedStatement_setSString(statement, 4, path[idx], strlen(path[idx]));
+        ResultSet_T result = PreparedStatement_executeQuery(statement);
+        if (ResultSet_next(result)) {
+            // 目录存在,获取 ID 并进入下一层
+            targetId = (int)ResultSet_getInt(result, 1);
+            if (idx == pathCount - 1) {
+                file->id = ResultSet_getInt(result, 1);
+                file->parent_id = ResultSet_getInt(result, 2);
+                const char *filename = ResultSet_getString(result, 3);
+                strcpy(file->filename, filename);
+                file->owner_id = ResultSet_getInt(result, 4);
+                const char *MD5 = ResultSet_getString(result, 5);
+                strcpy(file->md5, MD5);
+                file->file_size = ResultSet_getInt(result, 6);
+                file->type = ResultSet_getInt(result, 7);
+            }
+        } else {
+            Connection_close(con);
+            return -1;
+        }
+    }
+
+    Connection_close(con);
+    return targetId;
 }

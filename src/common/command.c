@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-25 23:43:33
+ * @LastEditTime : 2025-12-27 22:16:29
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "command.h"
@@ -88,40 +88,19 @@ void checkPartialFile(task_t *task) {
     uint32_t expectedSize;
     char response[RESPONSE_LENGTH] = {0};
     ResponseStatus statusCode = STATUS_SUCCESS;
-
     // 解析请求：filename|fileSize|checksum
     if (sscanf(task->data, "%255[^|]|%u|%32s", filename, &expectedSize, checksum) != 3) {
         statusCode = STATUS_INVALID_PARAM;
         strcpy(response, "0");
         goto send_response;
     }
-
-    // 构造部分文件路径
-    char partialPath[PATH_MAX_LENGTH];
-    char currentRealPath[PATH_MAX_LENGTH];
-
-    if (virtualPathToReal(currentVirtualPath, currentRealPath, sizeof(currentRealPath)) < 0) {
+    uint64_t uploadedSize = selectUploadTask(filename, checksum);
+    if (uploadedSize == 0) {
         statusCode = STATUS_FAIL;
         strcpy(response, "0");
         goto send_response;
     }
-    snprintf(partialPath, sizeof(partialPath), "%s/%s", currentRealPath, filename);
-    // 检查部分文件
-    struct stat st;
-    if (stat(partialPath, &st) == 0 && S_ISREG(st.st_mode)) {
-        uint32_t partialSize = (uint32_t)st.st_size;
-
-        // 验证部分文件有效性（大小合理）
-        if (partialSize < expectedSize) {
-            snprintf(response, sizeof(response), "%u", partialSize);
-        } else {
-            // 部分文件大小异常，删除重传
-            unlink(partialPath);
-            strcpy(response, "0");
-        }
-    } else {
-        strcpy(response, "0");
-    }
+    snprintf(response, sizeof(response), "%" PRIu64, uploadedSize);
 send_response:
     log_info("check partial file response:%s", response);
     sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, strlen(response));
@@ -724,6 +703,145 @@ cleanup:
     return result;
 }
 /**
+ * @brief 使用 mmap 接收大文件
+ * @return 0 成功，-1 失败
+ */
+static int receiveFileWithMmapVirtual(int sockFd, const char *filePath,
+                                      file_transfer_header_t *file_header, char *response,
+                                      size_t responseSize) {
+    int fd = -1;
+    void *mapped = MAP_FAILED;
+    int result = -1;
+    // 计算需要接收的数据量
+    uint32_t dataToReceive = file_header->fileSize - file_header->offset;
+    log_info("receive file data %d", dataToReceive);
+    // 打开/创建文件
+    if (file_header->offset > 0) {
+        fd = open(filePath, O_RDWR);
+    } else {
+        fd = open(filePath, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    }
+    if (fd < 0) {
+        log_error("Failed to open file for mmap: %s", filePath);
+        snprintf(response, responseSize, "puts error: failed to open file\n");
+        return -1;
+    }
+    // 扩展文件到目标大小
+    if (ftruncate(fd, file_header->fileSize) < 0) {
+        log_error("Failed to extend file: %s", strerror(errno));
+        snprintf(response, responseSize, "puts error: failed to allocate space\n");
+        goto cleanup;
+    }
+    // 映射文件到内存（从 offset 开始的部分）
+    mapped = mmap(NULL, dataToReceive, PROT_WRITE, MAP_SHARED, fd, file_header->offset);
+    if (mapped == MAP_FAILED) {
+        log_error("mmap failed: %s", strerror(errno));
+        snprintf(response, responseSize, "puts error: mmap failed\n");
+        goto cleanup;
+    }
+    log_info("File mapped successfully: size=%u, offset=%u, dataToReceive=%u",
+             file_header->fileSize, file_header->offset, dataToReceive);
+    // 直接接收数据到映射内存
+    uint32_t totalReceived = 0;
+    char *writePtr = (char *)mapped;
+    while (totalReceived < dataToReceive) {
+        uint32_t remaining = dataToReceive - totalReceived;
+        size_t toReceive =
+            (remaining < RECEIVE_FILE_BUFF_SIZE) ? remaining : RECEIVE_FILE_BUFF_SIZE;
+        ssize_t ret = recvn(sockFd, writePtr, toReceive);
+        if (ret <= 0) {
+            log_error("Failed to receive file data: ret=%zd, received=%u/%u", ret, totalReceived,
+                      dataToReceive);
+            insertUploadTask(file_header, totalReceived);
+            snprintf(response, responseSize, "puts error: file transfer interrupted\n");
+            goto cleanup;
+        }
+        writePtr += ret;
+        totalReceived += ret;
+        // log_debug("Received %u/%u bytes (mmap mode)", totalReceived, dataToReceive);
+    }
+    // 同步到磁盘
+    if (msync(mapped, dataToReceive, MS_SYNC) < 0) {
+        log_warn("msync failed: %s", strerror(errno));
+    }
+    log_info("File transfer completed (mmap): %s (%u bytes)", filePath, file_header->fileSize);
+    result = 0;
+    if (file_header->offset > 0) {
+        if (deleteUploadTask(file_header) < 0) {
+            log_error("delete from t_upload_task error.");
+        }
+    }
+cleanup:
+    if (mapped != MAP_FAILED) {
+        munmap(mapped, dataToReceive);
+    }
+    if (fd >= 0) {
+        close(fd);
+    }
+    return result;
+}
+/**
+ * @brief 使用传统方式接收文件
+ * @return 0 成功，-1 失败
+ */
+static int receiveFileTraditionalVirtual(int sockFd, const char *filePath,
+                                         file_transfer_header_t *file_header, char *response,
+                                         size_t responseSize) {
+    int fd = -1;
+    int result = -1;
+    // 根据传输模式打开文件
+    if (file_header->mode == TRANSFER_MODE_RESUME && file_header->offset > 0) {
+        fd = open(filePath, O_WRONLY | O_APPEND);
+        if (fd < 0) {
+            log_error("Failed to open partial file for resume: %s", filePath);
+            snprintf(response, responseSize, "Failed to resume transfer\n");
+            return -1;
+        }
+        log_info("Resuming file transfer from offset: %u", file_header->offset);
+    } else {
+        fd = open(filePath, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+        if (fd < 0) {
+            log_error("Failed to create file: %s", filePath);
+            snprintf(response, responseSize, "Failed to create file\n");
+            return -1;
+        }
+        file_header->offset = 0;
+        log_info("Starting new file transfer");
+    }
+
+    // 接收文件内容
+    uint32_t totalReceived = file_header->offset;
+    char buff[RECEIVE_FILE_BUFF_SIZE];
+
+    while (totalReceived < file_header->fileSize) {
+        uint32_t remaining = file_header->fileSize - totalReceived;
+        size_t toReceive =
+            (remaining < RECEIVE_FILE_BUFF_SIZE) ? remaining : RECEIVE_FILE_BUFF_SIZE;
+
+        ssize_t ret = recvn(sockFd, buff, toReceive);
+        if (ret <= 0) {
+            log_error("Failed to receive file data: ret=%zd, received=%u/%u", ret, totalReceived,
+                      file_header->fileSize);
+            snprintf(response, responseSize, "puts error: file transfer interrupted\n");
+            goto cleanup;
+        }
+        ssize_t written = write(fd, buff, ret);
+        if (written != ret) {
+            log_error("Failed to write file data: written=%zd, expected=%zd", written, ret);
+            snprintf(response, responseSize, "puts error: failed to write file\n");
+            goto cleanup;
+        }
+        totalReceived += ret;
+        // log_debug("Received %u/%u bytes", totalReceived, file_header->fileSize);
+    }
+    result = 0;
+cleanup:
+    if (fd >= 0) {
+        close(fd);
+    }
+    return result;
+}
+/**
  * @brief 使用传统方式接收文件
  * @return 0 成功，-1 失败
  */
@@ -732,7 +850,6 @@ static int receiveFileTraditional(int sockFd, const char *filePath, uint32_t fil
                                   size_t responseSize) {
     int fd = -1;
     int result = -1;
-
     // 根据传输模式打开文件
     if (mode == TRANSFER_MODE_RESUME && offset > 0) {
         fd = open(filePath, O_WRONLY | O_APPEND);
@@ -752,16 +869,13 @@ static int receiveFileTraditional(int sockFd, const char *filePath, uint32_t fil
         offset = 0;
         log_info("Starting new file transfer");
     }
-
     // 接收文件内容
     uint32_t totalReceived = offset;
     char buff[RECEIVE_FILE_BUFF_SIZE];
-
     while (totalReceived < fileSize) {
         uint32_t remaining = fileSize - totalReceived;
         size_t toReceive =
             (remaining < RECEIVE_FILE_BUFF_SIZE) ? remaining : RECEIVE_FILE_BUFF_SIZE;
-
         ssize_t ret = recvn(sockFd, buff, toReceive);
         if (ret <= 0) {
             log_error("Failed to receive file data: ret=%zd, received=%u/%u", ret, totalReceived,
@@ -769,27 +883,201 @@ static int receiveFileTraditional(int sockFd, const char *filePath, uint32_t fil
             snprintf(response, responseSize, "puts error: file transfer interrupted\n");
             goto cleanup;
         }
-
         ssize_t written = write(fd, buff, ret);
         if (written != ret) {
             log_error("Failed to write file data: written=%zd, expected=%zd", written, ret);
             snprintf(response, responseSize, "puts error: failed to write file\n");
             goto cleanup;
         }
-
         totalReceived += ret;
         log_debug("Received %u/%u bytes", totalReceived, fileSize);
     }
-
     result = 0;
-
 cleanup:
     if (fd >= 0) {
         close(fd);
     }
     return result;
 }
+/**
+ * @brief 上传文件服务器的处理(虚拟文件系统版本)
+ * @param task 处理的线程
+ */
+void putsCommandVirtual(task_t *task) {
+    log_info("Executing puts command (virtual, fd=%d)", task->peerFd);
+    char response[RESPONSE_LENGTH];
+    char fileFullPath[PATH_MAX_LENGTH] = {0};
+    char fileName[FILENAME_LENGTH] = {0};
+    char destPath[PATH_MAX_LENGTH] = {0};
+    ResponseStatus statusCode = STATUS_SUCCESS;
+    ssize_t responseLen = 0;
+    // 1. 获取用户信息
+    user_info_t *user = getListUser(task->peerFd);
+    if (!user) {
+        log_error("puts: User not found for fd=%d", task->peerFd);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "puts error: user session not found\n");
+        goto send_response;
+    }
+    // 2. 解析文件名和目标路径 (task->data = "filename destpath")
+    if (task->data[0] == '\0') {
+        log_error("puts: Empty command data");
+        statusCode = STATUS_INVALID_PARAM;
+        responseLen =
+            snprintf(response, sizeof(response), "puts error: filename cannot be empty\n");
+        goto send_response;
+    }
+    // 提取文件名和目标路径
+    if (extractFilePathAndName(fileName, destPath, task->data) < 0) {
+        log_error("Failed to extract filename from: %s", task->data);
+        strncpy(fileName, task->data, sizeof(fileName) - 1);
+        strcpy(destPath, user->pwd); // 默认使用当前目录
+    }
+    log_info("File to upload: %s -> %s", fileName, destPath);
+    // 3. 解析目标路径
+    char parsePath[PATH_MAX_SEGMENTS][PATH_SEGMENT_MAX_LENGTH];
+    int pathCount = parsePathToArray(destPath, parsePath, user->pwd);
+    if (pathCount < 0) {
+        log_error("puts: Path parsing failed: %s", destPath);
+        statusCode = STATUS_INVALID_PARAM;
+        responseLen =
+            snprintf(response, sizeof(response), "puts error: invalid destination path\n");
+        goto send_response;
+    }
+    // 4. 确保目标目录存在(不存在则创建)
+    int targetDirectoryId = resolveOrCreateDirectory(user, parsePath, pathCount);
+    if (targetDirectoryId < 0) {
+        log_error("puts: Failed to resolve/create directory: %s", destPath);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response),
+                               "puts error: failed to access destination directory\n");
+        goto send_response;
+    }
+    log_info("Target directory ID: %d", targetDirectoryId);
+    // 5. 接收文件传输头
+    file_transfer_header_t header;
+    int ret = recvn(task->peerFd, &header, sizeof(header));
+    if (ret != sizeof(header)) {
+        log_error("Failed to receive transfer header");
+        addEpollReadFd(task->epFd, task->peerFd);
+        return;
+    }
+    // 6. 转换网络字节序
+    uint32_t fileSize = ntohl(header.fileSize);
+    uint32_t offset = ntohl(header.offset);
+    header.fileSize = ntohl(header.fileSize);
+    header.offset = ntohl(header.offset);
+    log_info("Received file header: fileSize=%u, offset=%u, mode=%d, filename=%s, checkSum=%s",
+             fileSize, offset, header.mode, header.filename, header.checksum);
+    // 7. 检查文件是否已存在(秒传逻辑)
+    file_t existingFile;
+    memset(&existingFile, 0, sizeof(file_t));
+    strncpy(existingFile.md5, header.checksum, sizeof(existingFile.md5) - 1);
+    int fileExists = selectFileByMd5(&existingFile);
+    if (fileExists == 0) {
+        // 文件已存在,执行秒传
+        log_info("File already exists (MD5=%s), performing instant upload", header.checksum);
 
+        // 创建虚拟文件系统记录(引用已存在的物理文件)
+        file_t newFile;
+        memset(&newFile, 0, sizeof(file_t));
+        newFile.parent_id = (uint32_t)targetDirectoryId;
+        strncpy(newFile.filename, fileName, sizeof(newFile.filename) - 1);
+        newFile.owner_id = user->user_id;
+        strncpy(newFile.md5, header.checksum, sizeof(newFile.md5) - 1);
+        newFile.file_size = fileSize;
+        newFile.type = 1; // 普通文件
+
+        if (insertFile(&newFile) == 0) {
+            responseLen = snprintf(response, sizeof(response),
+                                   "File '%s' uploaded instantly (already exists, %u bytes)\n",
+                                   fileName, fileSize);
+            log_info("Instant upload completed: file_id=%u", newFile.id);
+        } else {
+            statusCode = STATUS_FAIL;
+            responseLen =
+                snprintf(response, sizeof(response), "puts error: failed to create file record\n");
+        }
+        goto send_response;
+    }
+    // 8. 构造物理文件路径(使用 MD5 作为文件名存储)
+    if (getFileFullPath(header.checksum, CLOUD_DISK_ROOT, fileFullPath) < 0) {
+        log_error("Failed to get full file path for MD5: %s", header.checksum);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "puts error: invalid file path\n");
+        goto send_response;
+    }
+    log_debug("Physical file path: %s", fileFullPath);
+    // 9. 接收文件数据
+    int transferResult;
+    uint32_t dataToReceive = fileSize - offset;
+    if (dataToReceive >= MMAP_THRESHOLD) {
+        log_info("Using mmap for large file transfer (%u bytes)", dataToReceive);
+        transferResult = receiveFileWithMmapVirtual(task->peerFd, fileFullPath, &header, response,
+                                                    sizeof(response));
+    } else {
+        log_info("Using traditional method for file transfer (%u bytes)", dataToReceive);
+        transferResult = receiveFileTraditionalVirtual(task->peerFd, fileFullPath, &header,
+                                                       response, sizeof(response));
+    }
+    if (transferResult < 0) {
+        statusCode = STATUS_FAIL;
+        responseLen = strlen(response);
+        goto send_response;
+    }
+    // 10. 验证文件完整性(可选,建议添加)
+    char calculatedMD5[33];
+    if (calculateFileMD5(fileFullPath, calculatedMD5) == 0) {
+        if (strcmp(calculatedMD5, header.checksum) != 0) {
+            log_error("MD5 mismatch: expected=%s, got=%s", header.checksum, calculatedMD5);
+            statusCode = STATUS_FAIL;
+            responseLen =
+                snprintf(response, sizeof(response), "puts error: file integrity check failed\n");
+            unlink(fileFullPath); // 删除损坏的文件
+            goto send_response;
+        }
+    }
+
+    // 11. 插入数据库记录
+    file_t newFile;
+    memset(&newFile, 0, sizeof(file_t));
+    newFile.parent_id = (uint32_t)targetDirectoryId;
+    strncpy(newFile.filename, fileName, sizeof(newFile.filename) - 1);
+    newFile.owner_id = user->user_id;
+    strncpy(newFile.md5, header.checksum, sizeof(newFile.md5) - 1);
+    newFile.file_size = fileSize;
+    newFile.type = 1; // 普通文件
+
+    if (insertFile(&newFile) != 0) {
+        log_error("Failed to insert file record into database");
+        statusCode = STATUS_FAIL;
+        responseLen =
+            snprintf(response, sizeof(response), "puts error: failed to create file record\n");
+        unlink(fileFullPath); // 删除物理文件
+        goto send_response;
+    }
+
+    // 12. 成功响应
+    if (offset > 0) {
+        responseLen =
+            snprintf(response, sizeof(response),
+                     "File '%s' resumed and uploaded successfully (%u bytes, from offset %u)\n",
+                     fileName, fileSize, offset);
+    } else {
+        responseLen = snprintf(response, sizeof(response),
+                               "File '%s' uploaded successfully (%u bytes)\n", fileName, fileSize);
+    }
+    log_info("File uploaded: id=%u, name=%s, size=%u, md5=%s", newFile.id, fileName, fileSize,
+             header.checksum);
+send_response:
+    if (sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, responseLen) < 0) {
+        log_error("puts: Failed to send response to client (fd=%d)", task->peerFd);
+    } else {
+        log_info("puts command completed: status=%d, file=%s", statusCode, fileName);
+    }
+
+    addEpollReadFd(task->epFd, task->peerFd);
+}
 /**
  * @brief 上传文件服务器的处理
  * @param task 处理的线程
@@ -1009,6 +1297,112 @@ static int sendFileTraditional(int sockFd, const char *filePath, uint32_t fileSi
 
     close(fd);
     return 0;
+}
+/**
+ * @brief 下载文件的命令
+ * @param task 对应线程
+ */
+void getsCommandVirtual(task_t *task) {
+    log_info("Executing gets command (fd=%d)", task->peerFd);
+    log_info("gets file path: %s", task->data);
+    char response[RESPONSE_LENGTH] = {0};
+    char fileVirtualPath[PATH_MAX_LENGTH] = {0};
+    ResponseStatus statusCode = STATUS_SUCCESS;
+    int responseLen = 0;
+    uint32_t clientOffset = 0;
+    user_info_t *user = getListUser(task->peerFd);
+    // 解析请求: "virtualPath|offset"
+    if (sscanf(task->data, "%[^|]|%u", fileVirtualPath, &clientOffset) < 1) {
+        log_error("Invalid gets request format: %s", task->data);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "gets error: invalid request format\n");
+        goto send_response;
+    }
+    log_info("Gets request: path=%s, offset=%u", fileVirtualPath, clientOffset);
+    // 3. 解析目标路径
+    char parsePath[PATH_MAX_SEGMENTS][PATH_SEGMENT_MAX_LENGTH];
+    int pathCount = parsePathToArray(fileVirtualPath, parsePath, user->pwd);
+    file_t destFile;
+    int ret = selectFileByPath(user, parsePath, pathCount, &destFile);
+    if (ret < 0) {
+        log_error("no such file: %s", destFile.filename);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "gets error: no such file.\n");
+        goto send_response;
+    }
+    if (destFile.type == 2) {
+        log_error("can't gets a directory: %s", destFile.filename);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "can't gets a directory.\n");
+        goto send_response;
+    }
+    // 保存原始文件大小（主机字节序）
+    uint32_t totalFileSize = (uint32_t)destFile.file_size;
+    // 验证 offset 合法性
+    if (clientOffset > totalFileSize) {
+        log_error("Invalid offset: %u > file size %u", clientOffset, totalFileSize);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "gets error: invalid offset\n");
+        goto send_response;
+    }
+    // 计算需要发送的数据量
+    uint32_t dataToSend = totalFileSize - clientOffset;
+    if (sendFileHeader(task->peerFd, totalFileSize, clientOffset, destFile.filename, destFile.md5)
+        != sizeof(file_transfer_header_t)) {
+        log_error("Failed to send file header");
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "gets error: send header failed\n");
+        goto send_response;
+    }
+    // 如果客户端已经有完整文件，直接返回成功
+    if (dataToSend == 0) {
+        log_info("File already complete on client side");
+        responseLen = snprintf(response, sizeof(response), "File already downloaded (%u bytes).\n",
+                               totalFileSize);
+        goto send_response;
+    }
+    char fileRealPath[PATH_MAX_LENGTH];
+    if (getFileFullPath(destFile.md5, CLOUD_DISK_ROOT, fileRealPath) < 0) {
+        log_error("Failed to get full file path for MD5: %s", destFile.md5);
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "gets error: invalid file path\n");
+        goto send_response;
+    }
+    log_info("file real path is %s",fileRealPath);
+    // 打开文件
+    int transferResult;
+    if (dataToSend >= MMAP_THRESHOLD) {
+        log_info("Using mmap for large file transfer (%u bytes)", dataToSend);
+        transferResult = sendFileWithMmap(task->peerFd, fileRealPath, totalFileSize, clientOffset,
+                                          response, sizeof(response));
+    } else {
+        log_info("Using traditional method for file transfer (%u bytes)", dataToSend);
+        transferResult = sendFileTraditional(task->peerFd, fileRealPath, totalFileSize,
+                                             clientOffset, response, sizeof(response));
+    }
+    if (transferResult < 0) {
+        statusCode = STATUS_FAIL;
+        responseLen = strlen(response);
+        goto send_response;
+    }
+    // 8. 成功
+    if (clientOffset > 0) {
+        responseLen =
+            snprintf(response, sizeof(response),
+                     "File resumed and downloaded successfully (%u bytes, from offset %u).\n",
+                     dataToSend, clientOffset);
+    } else {
+        responseLen = snprintf(response, sizeof(response),
+                               "File download successfully (%u bytes).\n", dataToSend);
+    }
+send_response:
+    if (sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, responseLen) < 0) {
+        log_error("gets: Failed to send response to client (fd=%d)", task->peerFd);
+    } else {
+        log_info("gets command completed: status=%d, file path=%s", statusCode, task->data);
+    }
+    addEpollReadFd(task->epFd, task->peerFd);
+    // log_info("gets: fd %d re-added to epoll", task->peerFd);
 }
 /**
  * @brief 下载文件的命令
@@ -1400,44 +1794,42 @@ void pwdCommandVirtual(task_t *task) {
         log_info("pwd command completed: status=%d, path=%s", statusCode, user->pwd);
     }
 }
-void changeUserPwd(user_info_t *user, const char **parsePath) {
-    if (!user || !parsePath || !parsePath[0]) {
+/**
+ * @brief 更改用户的工作目录
+ * @param user 需要更改的用户
+ * @param parsePath 解析后的目标路径
+ * @param pathCount 路径段数量
+ */
+void changeUserPwd(user_info_t *user, char parsePath[][PATH_SEGMENT_MAX_LENGTH], int pathCount) {
+    if (!user || !parsePath || pathCount <= 0) {
         return;
     }
-
     // 清空当前路径
     memset(user->pwd, 0, sizeof(user->pwd));
-
     // 重建路径字符串
     size_t offset = 0;
-
     // 第一个元素是根目录 "/"
     if (strcmp(parsePath[0], "/") == 0) {
         user->pwd[offset++] = '/';
     }
-
     // 拼接后续路径段
-    for (int i = 1; parsePath[i] != NULL && offset < PATH_MAX_LENGTH - 1; i++) {
-        // ✅ 修复: 只要不是刚开始就在根目录,就需要添加分隔符
+    for (int i = 1; i < pathCount && parsePath[i][0] != '\0' && offset < PATH_MAX_LENGTH - 1; i++) {
+        // 只要不是刚开始就在根目录,就需要添加分隔符
         if (offset > 0 && user->pwd[offset - 1] != '/') {
             user->pwd[offset++] = '/';
         }
-
         // 拷贝路径段
         size_t len = strlen(parsePath[i]);
         if (offset + len >= PATH_MAX_LENGTH - 1) {
             log_warn("Path too long, truncating");
             break;
         }
-
         strcpy(user->pwd + offset, parsePath[i]);
         offset += len;
     }
-
     // 确保以 null 结尾
     user->pwd[offset] = '\0';
-
-    // 特殊情况：如果只有根目录，确保是 "/"
+    // 特殊情况:如果只有根目录,确保是 "/"
     if (offset == 1 && user->pwd[0] == '/') {
         user->pwd[1] = '\0';
     }
@@ -1452,7 +1844,6 @@ void cdCommandVirtual(task_t *task) {
     char response[RESPONSE_LENGTH];
     ResponseStatus statusCode = STATUS_SUCCESS;
     ssize_t responseLen = 0;
-
     // 1. 检查参数是否为空
     if (task->data[0] == '\0') {
         log_error("cd: Empty directory name");
@@ -1461,7 +1852,6 @@ void cdCommandVirtual(task_t *task) {
             snprintf(response, sizeof(response), "cd error: directory name cannot be empty\n");
         goto send_response;
     }
-
     user_info_t *user = getListUser(task->peerFd);
     if (!user) {
         log_error("cd: User not found for fd=%d", task->peerFd);
@@ -1469,35 +1859,28 @@ void cdCommandVirtual(task_t *task) {
         responseLen = snprintf(response, sizeof(response), "cd error: user session not found\n");
         goto send_response;
     }
-
-    const char *parsePath[PATH_MAX_DEPTH];
-
+    char parsePath[PATH_MAX_SEGMENTS][PATH_SEGMENT_MAX_LENGTH];
     // 检查路径解析是否成功
-    if (parsePathToArray(task->data, parsePath, user->pwd) < 0) {
+    int pathCount = parsePathToArray(task->data, parsePath, user->pwd);
+    if (pathCount < 0) {
         log_error("cd: Path parsing failed (invalid path or too many '..'): %s", task->data);
         statusCode = STATUS_INVALID_PARAM;
         responseLen = snprintf(response, sizeof(response),
                                "cd error: invalid path (cannot go beyond root directory)\n");
         goto send_response;
     }
-
-    int directoryId = getDirectoryId(user, parsePath);
-
+    int directoryId = getDirectoryId(user, parsePath, pathCount);
     if (directoryId < 0) {
         log_warn("cd: Directory not found: %s", task->data);
         statusCode = STATUS_FAIL;
         responseLen = snprintf(response, sizeof(response),
                                "cd error: directory '%s' does not exist\n", task->data);
     } else {
-        changeUserPwd(user, parsePath);
+        changeUserPwd(user, parsePath, pathCount);
         user->current_dir_id = directoryId; // 同步更新 current_dir_id
         log_info("cd: Changed to directory: %s (id=%d)", user->pwd, directoryId);
         responseLen = snprintf(response, sizeof(response), "Changed to directory: %s\n", user->pwd);
     }
-    for (int i = 0; parsePath[i] != NULL; i++) {
-        free((void *)parsePath[i]);
-    }
-
 send_response:
     if (sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, responseLen) < 0) {
         log_error("cd: Failed to send response to client (fd=%d)", task->peerFd);
@@ -1524,9 +1907,9 @@ void mkdirCommandVirtual(task_t *task) {
             snprintf(response, sizeof(response), "mkdir error: directory name cannot be empty\n");
         goto send_response;
     }
-    const char *parsePath[PATH_MAX_DEPTH];
-    parsePathToArray(task->data, parsePath, user->pwd);
-    int ret = resolveOrCreateDirectory(user, parsePath);
+    char parsePath[PATH_MAX_SEGMENTS][PATH_SEGMENT_MAX_LENGTH];
+    int pathCount = parsePathToArray(task->data, parsePath, user->pwd);
+    int ret = resolveOrCreateDirectory(user, parsePath, pathCount);
     if (ret >= 0) {
         responseLen = snprintf(response, sizeof(response), "mkdir %s successfully.\n", task->data);
     } else {
@@ -1539,6 +1922,41 @@ send_response:
         log_error("mkdir: Failed to send response to client (fd=%d)", task->peerFd);
     } else {
         log_info("mkdir successfully.");
+    }
+}
+/**
+ * @brief 删除某一文件目录,如果该目录下有文件一并删除
+ * @param task 执行该线程对应的线程
+ */
+void rmdirCommandVirtual(task_t *task) {
+    log_info("Executing rmdir command (fd=%d)", task->peerFd);
+    char response[RESPONSE_LENGTH];
+    ResponseStatus statusCode = STATUS_SUCCESS;
+    ssize_t responseLen = 0;
+    user_info_t *user = getListUser(task->peerFd);
+    // 1. 检查参数是否为空
+    if (task->data[0] == '\0') {
+        log_error("rmdir: Empty directory name");
+        statusCode = STATUS_INVALID_PARAM;
+        responseLen =
+            snprintf(response, sizeof(response), "rmdir error: directory name cannot be empty\n");
+        goto send_response;
+    }
+    char parsePath[PATH_MAX_SEGMENTS][PATH_SEGMENT_MAX_LENGTH];
+    int pathCount = parsePathToArray(task->data, parsePath, user->pwd);
+    int targetId = getDirectoryId(user, parsePath, pathCount);
+    int ret = deleteFiles(user, targetId);
+    if (ret < 0) {
+        statusCode = STATUS_FAIL;
+        responseLen = snprintf(response, sizeof(response), "rmdir error: unknown error\n");
+        goto send_response;
+    }
+    responseLen = snprintf(response, sizeof(response), "rmdir successfully\n");
+send_response:
+    if (sendResponse(task->peerFd, statusCode, DATA_TYPE_TEXT, response, responseLen) < 0) {
+        log_error("rmdir: Failed to send response to client (fd=%d)", task->peerFd);
+    } else {
+        log_info("rmdir successfully.");
     }
 }
 /**
@@ -1565,16 +1983,18 @@ void executeCmd(task_t *task) {
             mkdirCommandVirtual(task);
             break;
         case CMD_TYPE_RMDIR:
-            rmdirCommand(task);
+            rmdirCommandVirtual(task);
+            // rmdirCommand(task);
             break;
         case CMD_TYPE_NOTCMD:
             notCommand(task);
             break;
         case CMD_TYPE_PUTS:
-            putsCommand(task);
+            // putsCommand(task);
+            putsCommandVirtual(task);
             break;
         case CMD_TYPE_GETS:
-            getsCommand(task);
+            getsCommandVirtual(task);
             break;
         case CMD_TYPE_CHECK_PARTIAL:
             checkPartialFile(task);

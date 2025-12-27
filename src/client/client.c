@@ -4,7 +4,7 @@
  * @Author       : Sheng 2900226123@qq.com
  * @Version      : 0.0.1
  * @LastEditors  : Sheng 2900226123@qq.com
- * @LastEditTime : 2025-12-23 23:59:14
+ * @LastEditTime : 2025-12-27 22:22:13
  * @Copyright    : G AUTOMOBILE RESEARCH INSTITUTE CO.,LTD Copyright (c) 2025.
 **/
 #include "client.h"
@@ -22,6 +22,124 @@
 #include <sys/mman.h>
 
 extern char workforlder[PATH_MAX_LENGTH];
+/**
+ * @brief 获取实际下载进度
+ */
+static uint32_t getActualDownloadProgress(const char *fileFullPath) {
+    char metaFile[PATH_MAX_LENGTH];
+    snprintf(metaFile, sizeof(metaFile), "%s.download", fileFullPath);
+
+    FILE *fp = fopen(metaFile, "r");
+    if (!fp) {
+        return 0;
+    }
+
+    uint32_t actualProgress = 0;
+    fscanf(fp, "%u", &actualProgress);
+    fclose(fp);
+
+    return actualProgress;
+}
+
+/**
+ * @brief 保存实际下载进度
+ */
+static void saveDownloadProgress(const char *fileFullPath, uint32_t progress) {
+    char metaFile[PATH_MAX_LENGTH];
+    snprintf(metaFile, sizeof(metaFile), "%s.download", fileFullPath);
+
+    FILE *fp = fopen(metaFile, "w");
+    if (fp) {
+        fprintf(fp, "%u", progress);
+        fclose(fp);
+    }
+}
+/**
+ * @brief 删除进度文件
+ */
+static void removeProgressFile(const char *fileFullPath) {
+    char metaFile[PATH_MAX_LENGTH];
+    snprintf(metaFile, sizeof(metaFile), "%s.download", fileFullPath);
+    unlink(metaFile);
+}
+static int getsFileWithMmapVirtual(int socketFd, const char *fileFullPath, uint32_t totalFileSize,
+                                   uint32_t serverOffset, uint32_t dataToReceive) {
+    int fd = -1;
+    void *mapped = MAP_FAILED;
+    int result = -1;
+
+    if (serverOffset > 0) {
+        fd = open(fileFullPath, O_RDWR);
+    } else {
+        fd = open(fileFullPath, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    }
+
+    if (fd < 0) {
+        log_error("Failed to open file: %s", fileFullPath);
+        return -1;
+    }
+
+    if (ftruncate(fd, totalFileSize) < 0) {
+        log_error("Failed to extend file: %s", strerror(errno));
+        goto cleanup;
+    }
+
+    mapped = mmap(NULL, dataToReceive, PROT_WRITE, MAP_SHARED, fd, serverOffset);
+    if (mapped == MAP_FAILED) {
+        log_error("mmap failed: %s", strerror(errno));
+        goto cleanup;
+    }
+
+    uint32_t totalReceived = 0;
+    char *writePtr = (char *)mapped;
+
+    while (totalReceived < dataToReceive) {
+        uint32_t remaining = dataToReceive - totalReceived;
+        size_t toReceive =
+            (remaining < RECEIVE_FILE_BUFF_SIZE) ? remaining : RECEIVE_FILE_BUFF_SIZE;
+
+        ssize_t ret = recvn(socketFd, writePtr, toReceive);
+        if (ret <= 0) {
+            log_error("Failed to receive file data: ret=%zd", ret);
+            goto cleanup;
+        }
+
+        writePtr += ret;
+        totalReceived += ret;
+
+        // 🔧 关键修改：定期保存进度
+        if (totalReceived % (RECEIVE_FILE_BUFF_SIZE * 1024 * 100) == 0) {
+            saveDownloadProgress(fileFullPath, serverOffset + totalReceived);
+        }
+
+        showProgressBar(serverOffset + totalReceived, totalFileSize, "Downloading");
+    }
+
+    printf("\n");
+
+    if (msync(mapped, dataToReceive, MS_SYNC) < 0) {
+        log_warn("msync failed: %s", strerror(errno));
+    }
+
+    // 🔧 下载完成，删除进度文件
+    removeProgressFile(fileFullPath);
+
+    log_info("File downloaded successfully (mmap): %s (%u bytes)", fileFullPath, totalReceived);
+    result = 0;
+
+cleanup:
+    if (mapped != MAP_FAILED) {
+        munmap(mapped, dataToReceive);
+    }
+    if (fd >= 0) {
+        // 🔧 失败时保存当前进度
+        if (result != 0 && totalReceived > 0) {
+            saveDownloadProgress(fileFullPath, serverOffset + totalReceived);
+        }
+        close(fd);
+    }
+    return result;
+}
 /**
  * @brief 传统方式发送文件
  */
@@ -393,7 +511,7 @@ int sendLoginPassword(int sockfd, packet_t *packet_p) {
         break;
     }
     return 0;
-} 
+}
 /**
  * @brief 用户注册
  * @param sockfd 客户端fd
@@ -734,7 +852,8 @@ int getsFile(int socketFd, const char *fileFullPath, uint32_t localOffset) {
     // 根据文件大小选择传输方式
     if (dataToReceive >= MMAP_THRESHOLD) {
         log_info("Using mmap for large file download (%u bytes)", dataToReceive);
-        return getsFileWithMmap(socketFd, fileFullPath, totalFileSize, serverOffset, dataToReceive);
+        return getsFileWithMmapVirtual(socketFd, fileFullPath, totalFileSize, serverOffset,
+                                       dataToReceive);
     } else {
         log_info("Using traditional method for file download (%u bytes)", dataToReceive);
         return getsFileTraditional(socketFd, fileFullPath, totalFileSize, serverOffset,
@@ -746,6 +865,7 @@ int getsFile(int socketFd, const char *fileFullPath, uint32_t localOffset) {
  */
 static int handlePutsCommand(int clientFd, packet_t *packet, const char *processedArgs,
                              const char *originalInput) {
+    int ret = 0;
     char srcPath[256] = {0};
     char destPath[256] = {0};
     parsePutsArgs(processedArgs, originalInput, srcPath, destPath);
@@ -775,12 +895,44 @@ static int handlePutsCommand(int clientFd, packet_t *packet, const char *process
 
     // 上传文件
     if (putsFile(clientFd, srcPath, serverOffset) < 0) {
+        log_info("puts file error,return -1");
+        ret = -1;
+    }
+
+    processResponse(clientFd, "upload");
+    return ret;
+}
+
+static int handleGetsCommandVirtual(int clientFd, packet_t *packet, const char *processedArgs) {
+    char fileLocalPath[PATH_MAX_LENGTH];
+    char fileRemotePath[PATH_MAX_LENGTH];
+    char fileName[FILENAME_LENGTH];
+    int ret = 0;
+    parseGetsArgs((char *)processedArgs, fileRemotePath, fileLocalPath, fileName);
+
+    // 🔧 使用实际进度而不是文件大小
+    uint32_t actualProgress = getActualDownloadProgress(fileLocalPath);
+
+    if (actualProgress > 0) {
+        log_info("Resuming download from: %u bytes", actualProgress);
+    }
+
+    // 构造请求（使用实际进度）
+    snprintf(packet->buff, sizeof(packet->buff), "%s|%u", fileRemotePath, actualProgress);
+    packet->len = strlen(packet->buff);
+
+    if (sendRequest(clientFd, packet) < 0) {
+        fprintf(stderr, "Failed to send command\n");
         return -1;
     }
 
-    return processResponse(clientFd, "upload");
+    // 下载文件
+    if (getsFile(clientFd, fileLocalPath, actualProgress) < 0) {
+        ret = -1;
+    }
+    processResponse(clientFd, "download");
+    return ret;
 }
-
 /**
  * @brief 处理 GETS 命令
  */
@@ -918,7 +1070,7 @@ int processCommand(int clientFd, packet_t *packet, char *buf) {
             return handlePutsCommand(clientFd, packet, processedArgs, originalInput);
 
         case CMD_TYPE_GETS:
-            return handleGetsCommand(clientFd, packet, processedArgs);
+            return handleGetsCommandVirtual(clientFd, packet, processedArgs);
 
         default:
             return handleNormalCommand(clientFd, packet);

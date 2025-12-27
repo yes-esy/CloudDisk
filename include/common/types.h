@@ -34,6 +34,8 @@
 #define PASSWORD "please input the right password:\n"
 #define MMAP_THRESHOLD (100 * 1024 * 1024) // 100MB
 #define PATH_MAX_DEPTH 128
+#define PATH_SEGMENT_MAX_LENGTH 256
+#define PATH_MAX_SEGMENTS 128
 /* 命令类型枚举 */
 typedef enum {
     CMD_TYPE_PWD = 1,
